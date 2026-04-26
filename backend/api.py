@@ -1,0 +1,208 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+import uuid
+from collections import deque
+from typing import AsyncIterator
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from langchain_core.messages import HumanMessage
+from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
+from sse_starlette.sse import EventSourceResponse
+
+from agent.graph import TOOLS, build_graph
+from agent.shortcuts import ShortcutResult, try_shortcut
+from agent.state import Step
+
+logger = logging.getLogger("react_agent.api")
+logging.basicConfig(level=logging.INFO)
+
+
+class QueryRequest(BaseModel):
+    query: str
+    stream: bool = False
+
+
+class AgentResponse(BaseModel):
+    result: str
+    trace: list[Step]
+    total_time: float
+    run_id: str
+    answer: str
+    steps: list[Step]
+    tools_used: list[str]
+    latency_ms: int
+    status: str
+
+
+RUNS: dict[str, AgentResponse] = {}
+RUN_ORDER: deque[str] = deque()
+MAX_STORED_RUNS = 100
+
+limiter = Limiter(key_func=get_remote_address, default_limits=["10/minute"])
+app = FastAPI(title="01 React Agent API")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    started_at = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        elapsed = time.perf_counter() - started_at
+        logger.exception("%s %s -> 500 %.4fs", request.method, request.url.path, elapsed)
+        raise
+
+    elapsed = time.perf_counter() - started_at
+    response.headers["X-Process-Time"] = f"{elapsed:.6f}"
+    logger.info(
+        "%s %s -> %s %.4fs",
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed,
+    )
+    return response
+
+
+def _initial_state(query: str) -> dict:
+    return {
+        "messages": [HumanMessage(content=query)],
+        "intermediate_steps": [],
+        "iteration_count": 0,
+        "final_answer": None,
+    }
+
+
+def _store_response(response: AgentResponse) -> None:
+    if response.run_id not in RUNS and len(RUN_ORDER) >= MAX_STORED_RUNS:
+        oldest_run_id = RUN_ORDER.popleft()
+        RUNS.pop(oldest_run_id, None)
+
+    if response.run_id not in RUNS:
+        RUN_ORDER.append(response.run_id)
+    RUNS[response.run_id] = response
+
+
+def _build_response(run_id: str, started_at: float, final_state: dict) -> AgentResponse:
+    trace = final_state.get("intermediate_steps", [])
+    result = final_state.get("final_answer") or ""
+    total_time = time.perf_counter() - started_at
+    tools_used = list(dict.fromkeys(step["action"] for step in trace if step.get("action")))
+
+    return AgentResponse(
+        result=result,
+        trace=trace,
+        total_time=total_time,
+        run_id=run_id,
+        answer=result,
+        steps=trace,
+        tools_used=tools_used,
+        latency_ms=round(total_time * 1000),
+        status="success",
+    )
+
+
+def _shortcut_state(query: str, shortcut: ShortcutResult) -> dict:
+    return {
+        "messages": [HumanMessage(content=query)],
+        "intermediate_steps": [shortcut.step],
+        "iteration_count": 1,
+        "final_answer": shortcut.final_answer,
+    }
+
+
+def _run_agent(query: str, run_id: str, started_at: float) -> AgentResponse:
+    shortcut = try_shortcut(query)
+    if shortcut is not None:
+        response = _build_response(run_id, started_at, _shortcut_state(query, shortcut))
+        _store_response(response)
+        return response
+
+    graph = build_graph()
+    final_state = graph.invoke(_initial_state(query))
+    response = _build_response(run_id, started_at, final_state)
+    _store_response(response)
+    return response
+
+
+def _sse_payload(event_type: str, content: str, step: int) -> dict[str, str]:
+    return {
+        "data": json.dumps(
+            {"type": event_type, "content": content, "step": step},
+            ensure_ascii=False,
+        )
+    }
+
+
+async def _stream_agent(query: str, run_id: str, started_at: float) -> AsyncIterator[dict[str, str]]:
+    shortcut = try_shortcut(query)
+    if shortcut is not None:
+        response = _build_response(run_id, started_at, _shortcut_state(query, shortcut))
+        _store_response(response)
+        yield _sse_payload("thought", shortcut.step["thought"], 1)
+        yield _sse_payload("action", shortcut.step["action"], 1)
+        yield _sse_payload("observation", shortcut.step["observation"], 1)
+        yield _sse_payload("final", response.result, 2)
+        return
+
+    graph = build_graph()
+    printed_steps = 0
+    final_state = _initial_state(query)
+
+    for state in graph.stream(final_state, stream_mode="values"):
+        final_state = state
+        steps = state.get("intermediate_steps", [])
+        while printed_steps < len(steps):
+            step_number = printed_steps + 1
+            step = steps[printed_steps]
+            yield _sse_payload("thought", step["thought"], step_number)
+            yield _sse_payload("action", step["action"], step_number)
+            yield _sse_payload("observation", step["observation"], step_number)
+            printed_steps += 1
+            await asyncio.sleep(0)
+
+    response = _build_response(run_id, started_at, final_state)
+    _store_response(response)
+    yield _sse_payload("final", response.result, printed_steps + 1)
+
+
+@app.post("/agent/invoke", response_model=AgentResponse)
+@app.post("/run", response_model=AgentResponse)
+async def run_agent(request: Request, payload: QueryRequest):
+    run_id = uuid.uuid4().hex
+    started_at = time.perf_counter()
+    if payload.stream:
+        return EventSourceResponse(_stream_agent(payload.query, run_id, started_at))
+    return _run_agent(payload.query, run_id, started_at)
+
+
+@app.get("/health")
+async def health() -> dict[str, object]:
+    return {"status": "ok", "tools": list(TOOLS.keys())}
+
+
+@app.get("/trace/{run_id}", response_model=AgentResponse)
+async def get_trace(run_id: str) -> AgentResponse:
+    response = RUNS.get(run_id)
+    if response is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return response
