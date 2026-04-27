@@ -122,6 +122,19 @@ class ApiTests(unittest.TestCase):
         self.assertIn('"type": "final"', text)
         self.assertIn('"content": "42"', text)
 
+    def test_get_stream_run_supports_eventsource_clients(self):
+        with self.client.stream(
+            "GET",
+            "/api/run?query=use%20the%20fake%20graph&stream=true",
+        ) as response:
+            self.assertEqual(response.status_code, 200)
+            text = "\n".join(response.iter_lines())
+
+        self.assertIn('"type": "thought"', text)
+        self.assertIn('"type": "action"', text)
+        self.assertIn('"tool": "calculator"', text)
+        self.assertIn('"type": "final"', text)
+
     def test_trace_unknown_run_returns_404(self):
         response = self.client.get("/trace/missing")
 

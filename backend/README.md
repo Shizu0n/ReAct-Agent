@@ -5,7 +5,6 @@ API FastAPI para um agente ReAct com LangGraph, modelos free/freemium configurav
 ![Python 3.11](https://img.shields.io/badge/Python-3.11-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115.4-009688)
 ![LangGraph](https://img.shields.io/badge/LangGraph-0.2.45-purple)
-![Railway](https://img.shields.io/badge/Railway-ready-black)
 
 ## Architecture
 

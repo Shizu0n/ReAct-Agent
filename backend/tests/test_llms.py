@@ -52,7 +52,7 @@ class LlmSelectionTests(unittest.TestCase):
     def test_fallback_error_redacts_configured_secret_values(self):
         from agent.llms import FreeModelFallback, FreeProvider
 
-        secret = "AIzaSy_this_is_a_realistic_secret"
+        secret = "test_gemini_fallback_secret"
 
         def failing_provider(messages):
             raise RuntimeError(
@@ -72,7 +72,7 @@ class LlmSelectionTests(unittest.TestCase):
     def test_http_status_errors_do_not_expose_query_secrets(self):
         from agent.llms import _raise_for_status
 
-        secret = "AIzaSy_status_error_secret"
+        secret = "test_gemini_status_error_secret"
         request = httpx.Request("POST", f"https://example.test/v1beta/model?key={secret}")
         response = httpx.Response(
             403,

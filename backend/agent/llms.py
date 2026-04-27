@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
 import httpx
 from langchain_core.messages import AIMessage, BaseMessage
+
+from agent.redaction import redact_secrets
 
 
 ProviderCall = Callable[[list[BaseMessage]], str]
@@ -40,37 +41,8 @@ class FreeModelFallback:
         raise RuntimeError("All free model providers failed: " + " | ".join(errors)) from None
 
 
-SECRET_ENV_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
-SECRET_QUERY_PARAMS = ("key", "api_key", "token", "access_token")
-
-
-def _configured_secret_values() -> set[str]:
-    return {
-        value
-        for name, value in os.environ.items()
-        if value
-        and len(value) >= 8
-        and any(marker in name.upper() for marker in SECRET_ENV_MARKERS)
-    }
-
-
-def _redact_secrets(text: str) -> str:
-    redacted = text
-    for secret in sorted(_configured_secret_values(), key=len, reverse=True):
-        redacted = redacted.replace(secret, "[redacted]")
-
-    query_params = "|".join(re.escape(param) for param in SECRET_QUERY_PARAMS)
-    redacted = re.sub(
-        rf"(?i)([?&](?:{query_params})=)[^&\s'\"<>]+",
-        r"\1[redacted]",
-        redacted,
-    )
-    redacted = re.sub(r"(?i)(Bearer\s+)[^\s'\"<>]+", r"\1[redacted]", redacted)
-    return redacted
-
-
 def _safe_exception_message(exc: Exception) -> str:
-    return _redact_secrets(str(exc))
+    return redact_secrets(exc)
 
 
 def _raise_for_status(response: httpx.Response, provider_name: str) -> None:
@@ -79,7 +51,7 @@ def _raise_for_status(response: httpx.Response, provider_name: str) -> None:
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
         reason = exc.response.reason_phrase
-        detail = _redact_secrets(exc.response.text[:500]).strip()
+        detail = redact_secrets(exc.response.text[:500]).strip()
         message = f"{provider_name} request failed with HTTP {status} {reason}"
         if detail:
             message = f"{message}: {detail}"

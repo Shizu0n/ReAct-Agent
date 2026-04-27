@@ -6,24 +6,26 @@ import logging
 import time
 import uuid
 from collections import deque
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
-from sse_starlette.sse import EventSourceResponse
 
 from agent.graph import TOOLS, build_graph
+from agent.redaction import configure_secure_logging
 from agent.shortcuts import ShortcutResult, try_shortcut
 from agent.state import Step
 
+configure_secure_logging()
 logger = logging.getLogger("react_agent.api")
-logging.basicConfig(level=logging.INFO)
 
 
 class QueryRequest(BaseModel):
@@ -46,6 +48,7 @@ class AgentResponse(BaseModel):
 RUNS: dict[str, AgentResponse] = {}
 RUN_ORDER: deque[str] = deque()
 MAX_STORED_RUNS = 100
+DIST_DIR = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["10/minute"])
 app = FastAPI(title="01 React Agent API")
@@ -144,10 +147,19 @@ def _run_agent(query: str, run_id: str, started_at: float) -> AgentResponse:
     return response
 
 
-def _sse_payload(event_type: str, content: str, step: int) -> dict[str, str]:
+def _sse_payload(
+    event_type: str,
+    content: str,
+    step: int,
+    tool: str | None = None,
+) -> dict[str, str]:
+    payload: dict[str, object] = {"type": event_type, "content": content, "step": step}
+    if tool:
+        payload["tool"] = tool
+
     return {
         "data": json.dumps(
-            {"type": event_type, "content": content, "step": step},
+            payload,
             ensure_ascii=False,
         )
     }
@@ -175,7 +187,7 @@ async def _stream_agent(query: str, run_id: str, started_at: float) -> AsyncIter
             step_number = printed_steps + 1
             step = steps[printed_steps]
             yield _sse_payload("thought", step["thought"], step_number)
-            yield _sse_payload("action", step["action"], step_number)
+            yield _sse_payload("action", f"Executing {step['action']}.", step_number, step["action"])
             yield _sse_payload("observation", step["observation"], step_number)
             printed_steps += 1
             await asyncio.sleep(0)
@@ -185,24 +197,68 @@ async def _stream_agent(query: str, run_id: str, started_at: float) -> AsyncIter
     yield _sse_payload("final", response.result, printed_steps + 1)
 
 
+async def _sse_response(iterator: AsyncIterator[dict[str, str]]) -> StreamingResponse:
+    async def events() -> AsyncIterator[str]:
+        async for payload in iterator:
+            yield f"data: {payload['data']}\n\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
 @app.post("/agent/invoke", response_model=AgentResponse)
+@app.post("/api/agent/invoke", response_model=AgentResponse)
 @app.post("/run", response_model=AgentResponse)
+@app.post("/api/run", response_model=AgentResponse)
 async def run_agent(request: Request, payload: QueryRequest):
     run_id = uuid.uuid4().hex
     started_at = time.perf_counter()
     if payload.stream:
-        return EventSourceResponse(_stream_agent(payload.query, run_id, started_at))
+        return await _sse_response(_stream_agent(payload.query, run_id, started_at))
     return _run_agent(payload.query, run_id, started_at)
 
 
+@app.get("/run")
+@app.get("/api/run")
+async def stream_agent(query: str, stream: bool = True):
+    run_id = uuid.uuid4().hex
+    started_at = time.perf_counter()
+    if stream:
+        return await _sse_response(_stream_agent(query, run_id, started_at))
+    return _run_agent(query, run_id, started_at)
+
+
 @app.get("/health")
+@app.get("/api/health")
 async def health() -> dict[str, object]:
     return {"status": "ok", "tools": list(TOOLS.keys())}
 
 
 @app.get("/trace/{run_id}", response_model=AgentResponse)
+@app.get("/api/trace/{run_id}", response_model=AgentResponse)
 async def get_trace(run_id: str) -> AgentResponse:
     response = RUNS.get(run_id)
     if response is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return response
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/{path:path}", include_in_schema=False)
+async def serve_frontend(path: str = ""):
+    if path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="API route not found")
+
+    dist_root = DIST_DIR.resolve()
+    requested_file = (dist_root / path).resolve()
+    if requested_file.is_file() and dist_root in requested_file.parents:
+        return FileResponse(requested_file)
+
+    index_file = dist_root / "index.html"
+    if index_file.is_file():
+        return FileResponse(index_file)
+
+    raise HTTPException(status_code=404, detail="Frontend build not found")

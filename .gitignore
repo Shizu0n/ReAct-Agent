@@ -22,3 +22,7 @@ graphify-out/
 CLAUDE.md
 AGENTS.md
 *.log
+.dev-local-*.log
+.vercel-dev-*.log
+.playwright-mcp
+.vercel
