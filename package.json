@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/dev-vercel.mjs",
+    "dev:vercel": "node scripts/dev-vercel.mjs"
+  }
+}

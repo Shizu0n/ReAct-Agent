@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
-from agent.llms import FreeModelFallback, configured_free_providers
+from agent.llms import FreeModelFallback, configured_free_providers, load_model_environment
 from agent.prompts import SYSTEM_PROMPT
 from agent.state import AgentState, MaxIterationsError, Step
 from agent.tools import calculator, python_executor, web_search
@@ -26,6 +24,16 @@ TOOL_INPUT_KEYS = {
     python_executor.name: "code",
     calculator.name: "expression",
 }
+CURRENT_FACT_PATTERNS = (
+    r"\blatest version\b",
+    r"\bcurrent version\b",
+    r"\bnewest release\b",
+    r"\bwhat\s+is\s+the\s+(?:current|latest|newest)\b",
+    r"\bis\s+.+\s+(?:still|now|currently)\b",
+    r"\b(?:price|stock|news|today|this year|2024|2025|2026)\b",
+)
+WEB_SEARCH_GATE_DISABLE_ENV = "REACT_AGENT_DISABLE_WEB_SEARCH_GATE"
+MAX_CURRENT_FACT_WEB_SEARCHES = 2
 
 
 @dataclass
@@ -70,6 +78,63 @@ def _last_ai_message(messages: list[BaseMessage]) -> AIMessage | None:
     return None
 
 
+def _last_user_message(messages: list[BaseMessage]) -> str:
+    for message in reversed(messages):
+        content = str(message.content)
+        if isinstance(message, HumanMessage) and not content.startswith("Observation:"):
+            return content
+    return ""
+
+
+def _web_search_gate_disabled() -> bool:
+    import os
+
+    return os.getenv(WEB_SEARCH_GATE_DISABLE_ENV, "").lower() in {"1", "true", "yes"}
+
+
+def _requires_web_search(query: str) -> bool:
+    if _web_search_gate_disabled():
+        return False
+
+    return any(
+        re.search(pattern, query, flags=re.IGNORECASE)
+        for pattern in CURRENT_FACT_PATTERNS
+    )
+
+
+def _runtime_system_prompt() -> str:
+    current_date = datetime.now(timezone.utc).date().isoformat()
+    return (
+        f"{SYSTEM_PROMPT}\n\n"
+        "Runtime context:\n"
+        f"- Current date: {current_date}.\n"
+        "- Dates before the current date are past dates, not future dates.\n"
+        "- For current-fact questions, answer from web_search observations after "
+        "you have relevant results; do not repeat web_search just because your "
+        "training knowledge feels inconsistent."
+    )
+
+
+def _web_search_count(steps: list[Step]) -> int:
+    return sum(1 for step in steps if step.get("action") == web_search.name)
+
+
+def _latest_web_search_observation(steps: list[Step]) -> str:
+    for step in reversed(steps):
+        if step.get("action") == web_search.name:
+            return str(step.get("observation", "")).strip()
+    return ""
+
+
+def _forced_final_from_search_observation(observation: str) -> str:
+    return (
+        "Thought: I already searched the web and have current results; repeating "
+        "web_search would risk a loop.\n"
+        "Final Answer: Based on the latest web_search observation, the current "
+        f"answer is:\n{observation}"
+    )
+
+
 def _parsed_from_state(state: AgentState) -> ParsedResponse:
     last_ai = _last_ai_message(state.get("messages", []))
     if last_ai is None:
@@ -82,16 +147,39 @@ def _parsed_from_state(state: AgentState) -> ParsedResponse:
 
 
 def _create_default_llm() -> Any:
-    if os.getenv("REACT_AGENT_SKIP_DOTENV") != "1":
-        load_dotenv()
+    load_model_environment()
     return FreeModelFallback(configured_free_providers())
 
 
 def agent_node(state: AgentState, llm: Any) -> dict[str, Any]:
-    prompt_messages = [SystemMessage(content=SYSTEM_PROMPT), *state.get("messages", [])]
+    prompt_messages = [SystemMessage(content=_runtime_system_prompt()), *state.get("messages", [])]
     response = llm.invoke(prompt_messages)
     content = str(getattr(response, "content", response))
     parsed = parse_react_response(content)
+    latest_query = _last_user_message(state.get("messages", []))
+    steps = state.get("intermediate_steps", [])
+    if (
+        parsed.final_answer is not None
+        and not steps
+        and _requires_web_search(latest_query)
+    ):
+        content = (
+            "Thought: I must search the web before answering this - my training "
+            "data may be outdated.\n"
+            "Action: web_search\n"
+            f"Action Input: {latest_query}"
+        )
+        parsed = parse_react_response(content)
+    elif (
+        parsed.action == web_search.name
+        and _requires_web_search(latest_query)
+        and _web_search_count(steps) >= MAX_CURRENT_FACT_WEB_SEARCHES
+    ):
+        content = _forced_final_from_search_observation(
+            _latest_web_search_observation(steps)
+        )
+        parsed = parse_react_response(content)
+
     ai_message = AIMessage(content=content, additional_kwargs={"react": asdict(parsed)})
     update: dict[str, Any] = {"messages": [ai_message]}
     if parsed.final_answer is not None:

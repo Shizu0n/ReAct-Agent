@@ -50,6 +50,16 @@ STATS_INTENT_WORDS = (
     "standard deviation",
     "std",
 )
+EXPLAIN_INTENT_WORDS = (
+    "demonstrate",
+    "explain",
+    "explique",
+    "passo",
+    "passos",
+    "show work",
+    "step",
+    "steps",
+)
 
 
 def try_shortcut(query: str) -> ShortcutResult | None:
@@ -60,8 +70,22 @@ def try_shortcut(query: str) -> ShortcutResult | None:
     return (
         _try_compound_growth(query, normalized_query)
         or _try_statistics(query, normalized_query)
+        or _try_square_root(query, normalized_query)
         or _try_arithmetic(query, normalized_query)
     )
+
+
+def try_contextual_shortcut(query: str, history: list[str]) -> ShortcutResult | None:
+    normalized_query = _normalize_text(query)
+    if not _is_explanation_followup(normalized_query):
+        return None
+
+    for previous in reversed(history[-8:]):
+        value = _extract_square_root_value(previous, _normalize_text(previous))
+        if value is not None:
+            return _square_root_shortcut(value, explain=True)
+
+    return None
 
 
 def _has_external_intent(normalized_query: str) -> bool:
@@ -155,6 +179,56 @@ def _try_statistics(query: str, normalized_query: str) -> ShortcutResult | None:
     )
 
 
+def _try_square_root(query: str, normalized_query: str) -> ShortcutResult | None:
+    value = _extract_square_root_value(query, normalized_query)
+    if value is None:
+        return None
+
+    return _square_root_shortcut(value, explain=_wants_explanation(normalized_query))
+
+
+def _square_root_shortcut(value: float, explain: bool) -> ShortcutResult | None:
+    expression = f"math.sqrt({value:g})"
+    result = str(calculator.invoke({"expression": expression}))
+    if result.startswith("Error:"):
+        return None
+
+    root = float(result)
+    root_label = _format_number(root)
+    value_label = _format_number(value)
+    radical = f"√{value_label}"
+
+    if explain:
+        if root.is_integer() and value >= 0:
+            answer = (
+                f"{radical} = {root_label}.\n\n"
+                "Steps:\n"
+                f"1. A square root asks which number multiplied by itself gives {value_label}.\n"
+                f"2. {root_label} × {root_label} = {value_label}.\n"
+                f"3. Therefore, {radical} = {root_label}."
+            )
+        else:
+            answer = (
+                f"{radical} ≈ {root_label}.\n\n"
+                "Steps:\n"
+                f"1. Rewrite the request as {expression}.\n"
+                f"2. Evaluate it with the calculator tool.\n"
+                f"3. The result is approximately {root_label}."
+            )
+    else:
+        answer = f"{radical} = {root_label}."
+
+    return ShortcutResult(
+        final_answer=answer,
+        step=_new_step(
+            "Use deterministic square-root math; no LLM needed.",
+            "calculator",
+            expression,
+            answer,
+        ),
+    )
+
+
 def _try_arithmetic(query: str, normalized_query: str) -> ShortcutResult | None:
     expression = _extract_arithmetic_expression(query, normalized_query)
     if expression is None:
@@ -190,6 +264,40 @@ def _extract_arithmetic_expression(query: str, normalized_query: str) -> str | N
         if _has_binary_operator(expression):
             return expression
     return None
+
+
+def _extract_square_root_value(query: str, normalized_query: str) -> float | None:
+    match = re.search(r"√\s*(?P<value>-?\d+(?:\.\d+)?)", query)
+    if match:
+        return float(match.group("value"))
+
+    match = re.search(r"\bsqrt\s*\(\s*(?P<value>-?\d+(?:\.\d+)?)\s*\)", normalized_query)
+    if match:
+        return float(match.group("value"))
+
+    match = re.search(r"\bsquare root of\s+(?P<value>-?\d+(?:\.\d+)?)", normalized_query)
+    if match:
+        return float(match.group("value"))
+
+    return None
+
+
+def _wants_explanation(normalized_query: str) -> bool:
+    return any(word in normalized_query for word in EXPLAIN_INTENT_WORDS)
+
+
+def _is_explanation_followup(normalized_query: str) -> bool:
+    followup_terms = (
+        "explain more",
+        "explique mais",
+        "mais detalhes",
+        "more steps",
+        "show the steps",
+        "the steps",
+        "os passos",
+        "passo a passo",
+    )
+    return any(term in normalized_query for term in followup_terms)
 
 
 def _has_binary_operator(expression: str) -> bool:

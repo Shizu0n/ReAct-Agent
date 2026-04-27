@@ -7,30 +7,37 @@ import time
 import uuid
 from collections import deque
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
-from langchain_core.messages import HumanMessage
-from pydantic import BaseModel
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from agent.graph import TOOLS, build_graph
+from agent.llms import configured_model_info
 from agent.redaction import configure_secure_logging
-from agent.shortcuts import ShortcutResult, try_shortcut
+from agent.shortcuts import ShortcutResult, try_contextual_shortcut, try_shortcut
 from agent.state import Step
 
 configure_secure_logging()
 logger = logging.getLogger("react_agent.api")
 
 
+class ChatMessageRequest(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class QueryRequest(BaseModel):
     query: str
     stream: bool = False
+    history: list[ChatMessageRequest] = Field(default_factory=list)
 
 
 class AgentResponse(BaseModel):
@@ -43,6 +50,20 @@ class AgentResponse(BaseModel):
     tools_used: list[str]
     latency_ms: int
     status: str
+
+
+class ModelInfoResponse(BaseModel):
+    provider: str
+    provider_label: str
+    model: str
+    label: str
+
+
+class AgentConfigResponse(BaseModel):
+    status: str
+    active_model: ModelInfoResponse | None
+    fallback_models: list[ModelInfoResponse]
+    tools: list[str]
 
 
 RUNS: dict[str, AgentResponse] = {}
@@ -86,9 +107,23 @@ async def log_requests(request: Request, call_next):
     return response
 
 
-def _initial_state(query: str) -> dict:
+def _history_messages(history: list[ChatMessageRequest]) -> list[BaseMessage]:
+    messages: list[BaseMessage] = []
+    for item in history[-8:]:
+        content = item.content.strip()
+        if not content:
+            continue
+        messages.append(HumanMessage(content=content) if item.role == "user" else AIMessage(content=content))
+    return messages
+
+
+def _history_text(history: list[ChatMessageRequest] | None = None) -> list[str]:
+    return [item.content for item in history or [] if item.content.strip()]
+
+
+def _initial_state(query: str, history: list[ChatMessageRequest] | None = None) -> dict:
     return {
-        "messages": [HumanMessage(content=query)],
+        "messages": [*_history_messages(history or []), HumanMessage(content=query)],
         "intermediate_steps": [],
         "iteration_count": 0,
         "final_answer": None,
@@ -124,24 +159,33 @@ def _build_response(run_id: str, started_at: float, final_state: dict) -> AgentR
     )
 
 
-def _shortcut_state(query: str, shortcut: ShortcutResult) -> dict:
+def _shortcut_state(
+    query: str,
+    shortcut: ShortcutResult,
+    history: list[ChatMessageRequest] | None = None,
+) -> dict:
     return {
-        "messages": [HumanMessage(content=query)],
+        "messages": [*_history_messages(history or []), HumanMessage(content=query)],
         "intermediate_steps": [shortcut.step],
         "iteration_count": 1,
         "final_answer": shortcut.final_answer,
     }
 
 
-def _run_agent(query: str, run_id: str, started_at: float) -> AgentResponse:
-    shortcut = try_shortcut(query)
+def _run_agent(
+    query: str,
+    run_id: str,
+    started_at: float,
+    history: list[ChatMessageRequest] | None = None,
+) -> AgentResponse:
+    shortcut = try_shortcut(query) or try_contextual_shortcut(query, _history_text(history))
     if shortcut is not None:
-        response = _build_response(run_id, started_at, _shortcut_state(query, shortcut))
+        response = _build_response(run_id, started_at, _shortcut_state(query, shortcut, history))
         _store_response(response)
         return response
 
     graph = build_graph()
-    final_state = graph.invoke(_initial_state(query))
+    final_state = graph.invoke(_initial_state(query, history))
     response = _build_response(run_id, started_at, final_state)
     _store_response(response)
     return response
@@ -165,10 +209,15 @@ def _sse_payload(
     }
 
 
-async def _stream_agent(query: str, run_id: str, started_at: float) -> AsyncIterator[dict[str, str]]:
-    shortcut = try_shortcut(query)
+async def _stream_agent(
+    query: str,
+    run_id: str,
+    started_at: float,
+    history: list[ChatMessageRequest] | None = None,
+) -> AsyncIterator[dict[str, str]]:
+    shortcut = try_shortcut(query) or try_contextual_shortcut(query, _history_text(history))
     if shortcut is not None:
-        response = _build_response(run_id, started_at, _shortcut_state(query, shortcut))
+        response = _build_response(run_id, started_at, _shortcut_state(query, shortcut, history))
         _store_response(response)
         yield _sse_payload("thought", shortcut.step["thought"], 1)
         yield _sse_payload("action", shortcut.step["action"], 1)
@@ -178,7 +227,7 @@ async def _stream_agent(query: str, run_id: str, started_at: float) -> AsyncIter
 
     graph = build_graph()
     printed_steps = 0
-    final_state = _initial_state(query)
+    final_state = _initial_state(query, history)
 
     for state in graph.stream(final_state, stream_mode="values"):
         final_state = state
@@ -217,8 +266,8 @@ async def run_agent(request: Request, payload: QueryRequest):
     run_id = uuid.uuid4().hex
     started_at = time.perf_counter()
     if payload.stream:
-        return await _sse_response(_stream_agent(payload.query, run_id, started_at))
-    return _run_agent(payload.query, run_id, started_at)
+        return await _sse_response(_stream_agent(payload.query, run_id, started_at, payload.history))
+    return _run_agent(payload.query, run_id, started_at, payload.history)
 
 
 @app.get("/run")
@@ -235,6 +284,18 @@ async def stream_agent(query: str, stream: bool = True):
 @app.get("/api/health")
 async def health() -> dict[str, object]:
     return {"status": "ok", "tools": list(TOOLS.keys())}
+
+
+@app.get("/config", response_model=AgentConfigResponse)
+@app.get("/api/config", response_model=AgentConfigResponse)
+async def config() -> AgentConfigResponse:
+    models = [ModelInfoResponse(**model.__dict__) for model in configured_model_info()]
+    return AgentConfigResponse(
+        status="configured" if models else "unconfigured",
+        active_model=models[0] if models else None,
+        fallback_models=models[1:],
+        tools=list(TOOLS.keys()),
+    )
 
 
 @app.get("/trace/{run_id}", response_model=AgentResponse)

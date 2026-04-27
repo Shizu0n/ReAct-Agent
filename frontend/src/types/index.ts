@@ -19,4 +19,20 @@ export interface AgentState {
   steps: Step[]
   isLoading: boolean
   error: string | null
+  config: AgentConfig | null
+  connectionStatus: 'checking' | 'online' | 'mock' | 'error'
+}
+
+export interface ModelInfo {
+  provider: string
+  provider_label: string
+  model: string
+  label: string
+}
+
+export interface AgentConfig {
+  status: 'configured' | 'unconfigured'
+  active_model: ModelInfo | null
+  fallback_models: ModelInfo[]
+  tools: string[]
 }

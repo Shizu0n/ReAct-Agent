@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import type { AgentState, Message, Step, StepType } from '../types'
+import { useEffect, useState } from 'react'
+import type { AgentConfig, AgentState, Message, Step, StepType } from '../types'
 
 type StreamPayload = {
   type: StepType
@@ -13,11 +13,15 @@ type SseParseResult = {
   remainder: string
 }
 
+type ApiHistoryMessage = Pick<Message, 'role' | 'content'>
+
 const initialState: AgentState = {
   messages: [],
   steps: [],
   isLoading: false,
   error: null,
+  config: null,
+  connectionStatus: 'checking',
 }
 
 const mockSteps: Array<Omit<Step, 'timestamp'>> = [
@@ -44,7 +48,7 @@ const mockSteps: Array<Omit<Step, 'timestamp'>> = [
   },
   {
     type: 'final',
-    content: 'This is a mock response. Connect the FastAPI backend to see real agent reasoning.',
+    content: 'Demo fallback enabled via VITE_AGENT_MOCK.',
     step: 5,
   },
 ]
@@ -58,7 +62,26 @@ function withTimestamp(step: Omit<Step, 'timestamp'>): Step {
 }
 
 function apiBaseUrl(): string {
-  return (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') ?? ''
+  const configuredUrl = (import.meta.env.VITE_API_URL as string | undefined)?.trim()
+  if (configuredUrl) {
+    return configuredUrl.replace(/\/$/, '')
+  }
+
+  return '/api'
+}
+
+function shouldUseMockFallback(): boolean {
+  return (import.meta.env.VITE_AGENT_MOCK as string | undefined) === 'true'
+}
+
+function historyForApi(messages: Message[]): ApiHistoryMessage[] {
+  return messages
+    .filter((message) => message.content.trim().length > 0)
+    .slice(-8)
+    .map((message) => ({
+      role: message.role,
+      content: message.content,
+    }))
 }
 
 function makeUserMessage(query: string): Message {
@@ -96,8 +119,67 @@ function sseDataFromEvent(eventBlock: string): string | null {
   return data.length > 0 ? data : null
 }
 
+async function requestErrorMessage(response: Response): Promise<string> {
+  const fallback = `Agent request failed with HTTP ${response.status}`
+
+  try {
+    const body = (await response.json()) as { detail?: unknown }
+    return typeof body.detail === 'string' ? `${fallback}: ${body.detail}` : fallback
+  } catch {
+    return fallback
+  }
+}
+
 export function useAgent() {
   const [state, setState] = useState<AgentState>(initialState)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadConfig(): Promise<void> {
+      if (shouldUseMockFallback()) {
+        setState((current) => ({
+          ...current,
+          config: null,
+          connectionStatus: 'mock',
+        }))
+        return
+      }
+
+      try {
+        const response = await fetch(`${apiBaseUrl()}/config`, {
+          headers: { Accept: 'application/json' },
+        })
+        if (!response.ok) {
+          throw new Error(await requestErrorMessage(response))
+        }
+
+        const config = (await response.json()) as AgentConfig
+        if (cancelled) return
+
+        setState((current) => ({
+          ...current,
+          config,
+          connectionStatus: 'online',
+        }))
+      } catch (error) {
+        if (cancelled) return
+
+        setState((current) => ({
+          ...current,
+          config: null,
+          error: error instanceof Error ? error.message : 'Unable to reach the FastAPI backend.',
+          connectionStatus: 'error',
+        }))
+      }
+    }
+
+    void loadConfig()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   function updateAssistantMessage(assistantId: string, content: string): void {
     setState((current) => ({
@@ -125,7 +207,7 @@ export function useAgent() {
       await new Promise((resolve) => window.setTimeout(resolve, 900))
     }
 
-    setState((current) => ({ ...current, isLoading: false }))
+    setState((current) => ({ ...current, isLoading: false, connectionStatus: 'mock' }))
   }
 
   function applyStreamPayload(payload: StreamPayload, assistantId: string): boolean {
@@ -141,17 +223,21 @@ export function useAgent() {
     }
 
     updateAssistantMessage(assistantId, step.content)
-    setState((current) => ({ ...current, isLoading: false }))
+    setState((current) => ({ ...current, isLoading: false, connectionStatus: 'online' }))
     return true
   }
 
-  async function runApi(query: string, assistantId: string): Promise<void> {
-    const baseUrl = apiBaseUrl()
-    if (!baseUrl) {
+  async function runApi(
+    query: string,
+    assistantId: string,
+    history: Message[],
+  ): Promise<void> {
+    if (shouldUseMockFallback()) {
       await runMock(assistantId)
       return
     }
 
+    const baseUrl = apiBaseUrl()
     let receivedEvent = false
     let completed = false
 
@@ -159,11 +245,11 @@ export function useAgent() {
       const response = await fetch(`${baseUrl}/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, stream: true }),
+        body: JSON.stringify({ query, stream: true, history: historyForApi(history) }),
       })
 
       if (!response.ok || !response.body) {
-        throw new Error(`Agent request failed with HTTP ${response.status}`)
+        throw new Error(await requestErrorMessage(response))
       }
 
       const reader = response.body.getReader()
@@ -202,7 +288,7 @@ export function useAgent() {
         throw new Error('The agent stream closed before returning a final answer.')
       }
     } catch (error) {
-      if (!receivedEvent && !completed) {
+      if (!receivedEvent && !completed && shouldUseMockFallback()) {
         await runMock(assistantId)
         return
       }
@@ -211,6 +297,7 @@ export function useAgent() {
         ...current,
         isLoading: false,
         error: error instanceof Error ? error.message : 'The agent stream failed.',
+        connectionStatus: 'error',
       }))
     }
   }
@@ -231,7 +318,7 @@ export function useAgent() {
       error: null,
     }))
 
-    void runApi(trimmedQuery, assistantId)
+    void runApi(trimmedQuery, assistantId, state.messages)
   }
 
   return { state, sendQuery }

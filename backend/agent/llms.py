@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 import httpx
+from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, BaseMessage
 
 from agent.redaction import redact_secrets
@@ -17,6 +18,14 @@ ProviderCall = Callable[[list[BaseMessage]], str]
 class FreeProvider:
     name: str
     call: ProviderCall
+
+
+@dataclass(frozen=True)
+class ModelInfo:
+    provider: str
+    provider_label: str
+    model: str
+    label: str
 
 
 class FreeModelFallback:
@@ -39,6 +48,56 @@ class FreeModelFallback:
                     f"{provider.name}: {type(exc).__name__}: {_safe_exception_message(exc)}"
                 )
         raise RuntimeError("All free model providers failed: " + " | ".join(errors)) from None
+
+
+def load_model_environment() -> None:
+    if os.getenv("REACT_AGENT_SKIP_DOTENV") != "1":
+        load_dotenv()
+
+
+def _model_label(provider_label: str, model: str) -> str:
+    if model.startswith("gemini-"):
+        model_name = model.removeprefix("gemini-").replace("-", " ").title()
+        return f"{provider_label} {model_name}"
+    return f"{provider_label} {model}"
+
+
+def configured_model_info() -> list[ModelInfo]:
+    load_model_environment()
+
+    models: list[ModelInfo] = []
+    if os.getenv("GEMINI_API_KEY"):
+        model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        models.append(ModelInfo("gemini", "Gemini", model, _model_label("Gemini", model)))
+    if os.getenv("GROQ_API_KEY"):
+        model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+        models.append(ModelInfo("groq", "Groq", model, _model_label("Groq", model)))
+    if os.getenv("GITHUB_MODELS_TOKEN") and os.getenv("GITHUB_MODELS_MODEL"):
+        model = os.environ["GITHUB_MODELS_MODEL"]
+        models.append(
+            ModelInfo(
+                "github_models",
+                "GitHub Models",
+                model,
+                _model_label("GitHub Models", model),
+            )
+        )
+    if os.getenv("OPENROUTER_API_KEY"):
+        model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
+        models.append(
+            ModelInfo("openrouter", "OpenRouter", model, _model_label("OpenRouter", model))
+        )
+    if os.getenv("CF_ACCOUNT_ID") and os.getenv("CF_WORKERS_AI_TOKEN"):
+        model = os.getenv("CF_WORKERS_AI_MODEL", "@cf/meta/llama-3-8b-instruct")
+        models.append(
+            ModelInfo(
+                "cloudflare_workers_ai",
+                "Cloudflare Workers AI",
+                model,
+                _model_label("Cloudflare Workers AI", model),
+            )
+        )
+    return models
 
 
 def _safe_exception_message(exc: Exception) -> str:
@@ -164,6 +223,8 @@ def _call_github_models(messages: list[BaseMessage]) -> str:
 
 
 def configured_free_providers() -> list[FreeProvider]:
+    load_model_environment()
+
     providers: list[FreeProvider] = []
     if os.getenv("GEMINI_API_KEY"):
         providers.append(FreeProvider("gemini", _call_gemini))

@@ -13,6 +13,16 @@ class ScriptedLLM:
         return AIMessage(content=next(self._responses))
 
 
+class CapturingLLM(ScriptedLLM):
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.messages = []
+
+    def invoke(self, messages):
+        self.messages.append(messages)
+        return super().invoke(messages)
+
+
 class ToolTests(unittest.TestCase):
     def test_calculator_evaluates_math_expression(self):
         from agent.tools import calculator
@@ -109,8 +119,37 @@ class ShortcutTests(unittest.TestCase):
         self.assertIn("median: 21", shortcut.final_answer)
         self.assertIn("sample standard deviation", shortcut.final_answer)
 
+    def test_square_root_shortcut_explains_steps(self):
+        from agent.shortcuts import try_shortcut
+
+        shortcut = try_shortcut("Calculate √1764 and explain the steps")
+
+        self.assertIsNotNone(shortcut)
+        self.assertEqual(shortcut.step["action"], "calculator")
+        self.assertEqual(shortcut.step["action_input"], "math.sqrt(1764)")
+        self.assertIn("√1764 = 42", shortcut.final_answer)
+        self.assertIn("42 × 42 = 1764", shortcut.final_answer)
+
+    def test_contextual_followup_explains_previous_square_root(self):
+        from agent.shortcuts import try_contextual_shortcut
+
+        shortcut = try_contextual_shortcut(
+            "explain more the steps",
+            ["Calculate √1764 and explain the steps", "√1764 = 42."],
+        )
+
+        self.assertIsNotNone(shortcut)
+        self.assertEqual(shortcut.step["action"], "calculator")
+        self.assertIn("42 × 42 = 1764", shortcut.final_answer)
+
 
 class GraphTests(unittest.TestCase):
+    def test_web_search_gate_can_be_disabled_for_tests(self):
+        from agent.graph import _requires_web_search
+
+        with patch.dict(os.environ, {"REACT_AGENT_DISABLE_WEB_SEARCH_GATE": "1"}):
+            self.assertFalse(_requires_web_search("what is the latest version of python"))
+
     def test_graph_runs_tool_then_returns_final_answer(self):
         from agent.graph import build_graph
 
@@ -135,6 +174,110 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(final_state["iteration_count"], 1)
         self.assertEqual(final_state["intermediate_steps"][0]["action"], "calculator")
         self.assertEqual(final_state["intermediate_steps"][0]["observation"], "42")
+
+    def test_graph_system_prompt_includes_current_date_context(self):
+        from agent.graph import build_graph
+
+        llm = CapturingLLM(["Thought: Done.\nFinal Answer: ok"])
+        graph = build_graph(llm=llm)
+
+        graph.invoke(
+            {
+                "messages": [HumanMessage(content="hello")],
+                "intermediate_steps": [],
+                "iteration_count": 0,
+                "final_answer": None,
+            }
+        )
+
+        system_prompt = llm.messages[0][0].content
+        self.assertIn("Current date:", system_prompt)
+        self.assertIn("Dates before the current date are past dates", system_prompt)
+        self.assertIn("do not repeat web_search", system_prompt)
+
+    def test_graph_forces_web_search_for_latest_version_final_answer_skip(self):
+        from agent.graph import TOOLS, build_graph
+
+        class FakeWebSearch:
+            def __init__(self):
+                self.calls = []
+
+            def invoke(self, payload):
+                self.calls.append(payload)
+                return "Python 3.13.7 is the latest stable Python release."
+
+        fake_web_search = FakeWebSearch()
+        llm = ScriptedLLM(
+            [
+                "Thought: I know this from memory.\nFinal Answer: Python 3.12.3",
+                "Thought: The search result says Python 3.13.7.\nFinal Answer: Python 3.13.7",
+            ]
+        )
+        graph = build_graph(llm=llm)
+
+        with patch.dict(os.environ, {"REACT_AGENT_DISABLE_WEB_SEARCH_GATE": ""}):
+            with patch.dict(TOOLS, {"web_search": fake_web_search}):
+                final_state = graph.invoke(
+                    {
+                        "messages": [HumanMessage(content="what is the latest version of python")],
+                        "intermediate_steps": [],
+                        "iteration_count": 0,
+                        "final_answer": None,
+                    }
+                )
+
+        self.assertEqual(
+            fake_web_search.calls,
+            [{"query": "what is the latest version of python"}],
+        )
+        self.assertEqual(final_state["final_answer"], "Python 3.13.7")
+        self.assertEqual(final_state["iteration_count"], 1)
+        self.assertEqual(final_state["intermediate_steps"][0]["action"], "web_search")
+        self.assertEqual(
+            final_state["intermediate_steps"][0]["action_input"],
+            "what is the latest version of python",
+        )
+
+    def test_graph_forces_final_after_repeated_current_fact_web_searches(self):
+        from agent.graph import TOOLS, build_graph
+
+        class FakeWebSearch:
+            def __init__(self):
+                self.calls = []
+
+            def invoke(self, payload):
+                self.calls.append(payload)
+                return "Official Python downloads page says Download Python 3.14.4."
+
+        fake_web_search = FakeWebSearch()
+        llm = ScriptedLLM(
+            [
+                "Thought: Need current data.\nAction: web_search\nAction Input: latest Python version",
+                "Thought: These dates seem future.\nAction: web_search\nAction Input: latest stable Python release",
+                "Thought: Still confused by dates.\nAction: web_search\nAction Input: currently available Python download",
+            ]
+        )
+        graph = build_graph(llm=llm)
+
+        with patch.dict(os.environ, {"REACT_AGENT_DISABLE_WEB_SEARCH_GATE": ""}):
+            with patch.dict(TOOLS, {"web_search": fake_web_search}):
+                final_state = graph.invoke(
+                    {
+                        "messages": [HumanMessage(content="what is the latest version of python")],
+                        "intermediate_steps": [],
+                        "iteration_count": 0,
+                        "final_answer": None,
+                    }
+                )
+
+        self.assertEqual(len(fake_web_search.calls), 2)
+        self.assertEqual(final_state["iteration_count"], 2)
+        self.assertEqual(
+            [step["action"] for step in final_state["intermediate_steps"]],
+            ["web_search", "web_search"],
+        )
+        self.assertIn("Download Python 3.14.4", final_state["final_answer"])
+        self.assertIn("repeating web_search would risk a loop", final_state["messages"][-1].content)
 
 
 if __name__ == "__main__":

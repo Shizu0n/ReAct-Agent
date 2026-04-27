@@ -41,7 +41,7 @@ export function DemoSection({ state, sendQuery }: DemoSectionProps) {
         <SectionHeader
           kicker="Live Demo"
           title="Ask the agent"
-          body="Type any research question. Watch the agent reason through it step by step. No backend? The demo runs in mock mode automatically."
+          body="Type any research question. Watch the agent reason through it step by step."
         />
 
         <div className="mt-12 grid gap-5 lg:grid-cols-[3fr_2fr]">
@@ -86,20 +86,35 @@ function ChatPanel({
   loadingLabel: string
   onSubmit: (query: string) => void
 }) {
+  const activeModel = state.config?.active_model?.label
+  const fallbackCount = state.config?.fallback_models.length ?? 0
+  const modelLabel = activeModel ?? modelStatusLabel(state.connectionStatus)
+  const modelSummary =
+    fallbackCount > 0
+      ? `${modelLabel} +${fallbackCount} fallback${fallbackCount === 1 ? '' : 's'}`
+      : modelLabel
+  const connectionLabel =
+    state.connectionStatus === 'online' ? 'Agent Online' : connectionStatusLabel(state.connectionStatus)
+
   return (
     <div className="flex min-h-[560px] flex-col overflow-hidden rounded-2xl border border-white/[0.08] bg-[#040404]">
       <div className="flex items-center justify-between border-b border-white/[0.08] px-5 py-4">
         <div className="flex items-center gap-2">
           <motion.span
-            className="h-2 w-2 rounded-full bg-[var(--accent)]"
+            className={`h-2 w-2 rounded-full ${state.connectionStatus === 'online' ? 'bg-[var(--accent)]' : 'bg-[#555]'}`}
             animate={state.isLoading ? { opacity: [1, 0.3, 1] } : undefined}
             transition={{ repeat: Infinity, duration: 1 }}
           />
           <span className="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-[#6d6d6d]">
-            Agent Online
+            {connectionLabel}
           </span>
         </div>
-        <span className="font-mono text-[0.65rem] text-[#555]">GPT-4o-mini · LangGraph</span>
+        <span
+          className="max-w-[58%] truncate text-right font-mono text-[0.65rem] text-[#555]"
+          title={`${modelSummary} - LangGraph`}
+        >
+          {modelSummary} - LangGraph
+        </span>
       </div>
 
       <div className="flex max-h-[420px] min-h-[320px] flex-1 flex-col gap-4 overflow-y-auto p-5">
@@ -138,6 +153,26 @@ function ChatPanel({
   )
 }
 
+function modelStatusLabel(status: AgentState['connectionStatus']): string {
+  const labels: Record<AgentState['connectionStatus'], string> = {
+    checking: 'Detecting model...',
+    online: 'No model configured',
+    mock: 'Mock Mode',
+    error: 'API Error',
+  }
+  return labels[status]
+}
+
+function connectionStatusLabel(status: AgentState['connectionStatus']): string {
+  const labels: Record<AgentState['connectionStatus'], string> = {
+    checking: 'Checking API',
+    online: 'Agent Online',
+    mock: 'Mock Mode',
+    error: 'API Error',
+  }
+  return labels[status]
+}
+
 function EmptyChat({ onSubmit }: { onSubmit: (query: string) => void }) {
   return (
     <div className="m-auto flex flex-col gap-3">
@@ -164,7 +199,7 @@ function ChatMessage({ message }: { message: Message }) {
       <p className="mb-1 font-mono text-[0.6rem] uppercase tracking-[0.1em] text-[#6e6e6e]">
         {isUser ? 'You' : 'Agent'}
       </p>
-      <div className="max-w-[85%] rounded-2xl border border-white/[0.08] bg-white/[0.06] px-4 py-3 text-[0.9rem] leading-[1.65] text-[#efefef]">
+      <div className="max-w-[85%] whitespace-pre-line rounded-2xl border border-white/[0.08] bg-white/[0.06] px-4 py-3 text-[0.9rem] leading-[1.65] text-[#efefef]">
         {message.content}
       </div>
     </div>
@@ -240,7 +275,7 @@ function TraceStep({ step }: { step: Step }) {
             {new Date(step.timestamp).toLocaleTimeString([], { hour12: false })}
           </span>
         </div>
-        <p className="text-[0.82rem] leading-[1.6] text-[#ccc]">{step.content}</p>
+        <p className="whitespace-pre-line text-[0.82rem] leading-[1.6] text-[#ccc]">{step.content}</p>
         {step.tool ? (
           <p className="mt-1 font-mono text-[0.68rem] text-[#6d6d6d]">→ {step.tool}</p>
         ) : null}
