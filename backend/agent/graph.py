@@ -1,28 +1,41 @@
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
-from agent.llms import FreeModelFallback, configured_free_providers, load_model_environment
+from agent.llms import (
+    FreeModelFallback,
+    configured_free_providers,
+    load_model_environment,
+)
 from agent.prompts import SYSTEM_PROMPT
 from agent.state import AgentState, MaxIterationsError, Step
-from agent.tools import calculator, python_executor, web_search
+from agent.tools import (
+    calculator,
+    normalize_python_code_input,
+    python_executor,
+    web_search,
+)
 
 MAX_ITERATIONS = 10
+WEB_SEARCH_TOOL_NAME = cast(Any, web_search).name
+PYTHON_EXECUTOR_TOOL_NAME = cast(Any, python_executor).name
+CALCULATOR_TOOL_NAME = cast(Any, calculator).name
 TOOLS = {
-    web_search.name: web_search,
-    python_executor.name: python_executor,
-    calculator.name: calculator,
+    WEB_SEARCH_TOOL_NAME: web_search,
+    PYTHON_EXECUTOR_TOOL_NAME: python_executor,
+    CALCULATOR_TOOL_NAME: calculator,
 }
 TOOL_INPUT_KEYS = {
-    web_search.name: "query",
-    python_executor.name: "code",
-    calculator.name: "expression",
+    WEB_SEARCH_TOOL_NAME: "query",
+    PYTHON_EXECUTOR_TOOL_NAME: "code",
+    CALCULATOR_TOOL_NAME: "expression",
 }
 CURRENT_FACT_PATTERNS = (
     r"\blatest version\b",
@@ -87,8 +100,6 @@ def _last_user_message(messages: list[BaseMessage]) -> str:
 
 
 def _web_search_gate_disabled() -> bool:
-    import os
-
     return os.getenv(WEB_SEARCH_GATE_DISABLE_ENV, "").lower() in {"1", "true", "yes"}
 
 
@@ -116,12 +127,12 @@ def _runtime_system_prompt() -> str:
 
 
 def _web_search_count(steps: list[Step]) -> int:
-    return sum(1 for step in steps if step.get("action") == web_search.name)
+    return sum(1 for step in steps if step.get("action") == WEB_SEARCH_TOOL_NAME)
 
 
 def _latest_web_search_observation(steps: list[Step]) -> str:
     for step in reversed(steps):
-        if step.get("action") == web_search.name:
+        if step.get("action") == WEB_SEARCH_TOOL_NAME:
             return str(step.get("observation", "")).strip()
     return ""
 
@@ -152,7 +163,10 @@ def _create_default_llm() -> Any:
 
 
 def agent_node(state: AgentState, llm: Any) -> dict[str, Any]:
-    prompt_messages = [SystemMessage(content=_runtime_system_prompt()), *state.get("messages", [])]
+    prompt_messages = [
+        SystemMessage(content=_runtime_system_prompt()),
+        *state.get("messages", []),
+    ]
     response = llm.invoke(prompt_messages)
     content = str(getattr(response, "content", response))
     parsed = parse_react_response(content)
@@ -171,7 +185,7 @@ def agent_node(state: AgentState, llm: Any) -> dict[str, Any]:
         )
         parsed = parse_react_response(content)
     elif (
-        parsed.action == web_search.name
+        parsed.action == WEB_SEARCH_TOOL_NAME
         and _requires_web_search(latest_query)
         and _web_search_count(steps) >= MAX_CURRENT_FACT_WEB_SEARCHES
     ):
@@ -199,10 +213,16 @@ def _run_tool(action: str, action_input: str) -> str:
         return f"Error: {type(exc).__name__}: {exc}"
 
 
+def _normalize_tool_input(action: str, action_input: str) -> str:
+    if action == PYTHON_EXECUTOR_TOOL_NAME:
+        return normalize_python_code_input(action_input)
+    return action_input
+
+
 def tool_node(state: AgentState) -> dict[str, Any]:
     parsed = _parsed_from_state(state)
     action = parsed.action or ""
-    action_input = parsed.action_input or ""
+    action_input = _normalize_tool_input(action, parsed.action_input or "")
     observation = _run_tool(action, action_input)
     step: Step = {
         "thought": parsed.thought,

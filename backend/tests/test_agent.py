@@ -34,7 +34,9 @@ class ToolTests(unittest.TestCase):
     def test_calculator_rejects_builtin_access(self):
         from agent.tools import calculator
 
-        result = calculator.invoke({"expression": "__import__('os').system('echo nope')"})
+        result = calculator.invoke(
+            {"expression": "__import__('os').system('echo nope')"}
+        )
 
         self.assertIn("Error:", result)
 
@@ -44,6 +46,99 @@ class ToolTests(unittest.TestCase):
         result = python_executor.invoke({"code": "print(math.factorial(5))"})
 
         self.assertEqual(result, "120")
+
+    def test_python_executor_solves_symbolic_equation_with_sympy(self):
+        from agent.tools import python_executor
+
+        result = python_executor.invoke(
+            {"code": "x, y = symbols('x y'); print(solve(2*x + 4*y + 6, x))"}
+        )
+
+        self.assertIn("-2*y - 3", result)
+
+    def test_python_executor_strips_fences_and_redundant_sympy_import(self):
+        from agent.tools import python_executor
+
+        result = python_executor.invoke(
+            {
+                "code": """```python
+from sympy import symbols, Eq, solve
+x, y = symbols('x y')
+eq1 = Eq(4*x + 5*y + 6, 0)
+eq2 = Eq(3*x + y + 2, 0)
+print(solve((eq1, eq2), (x, y)))
+```"""
+            }
+        )
+
+        self.assertIn("x: -4/11", result)
+        self.assertIn("y: -10/11", result)
+
+    def test_python_executor_repairs_flattened_fenced_sympy_code(self):
+        from agent.tools import python_executor
+
+        result = python_executor.invoke(
+            {
+                "code": (
+                    "``` from sympy import symbols, Eq, solve "
+                    "# Declare the symbols x, y = symbols('x y') "
+                    "# Define the equations eq1 = Eq(4*x + 5*y, -6) "
+                    "eq2 = Eq(3*x + y, -2) "
+                    "# Solve the system of equations solution = solve((eq1, eq2), (x, y)) "
+                    "print(solution) ```"
+                )
+            }
+        )
+
+        self.assertIn("x: -4/11", result)
+        self.assertIn("y: -10/11", result)
+
+    def test_python_executor_strips_fences_and_redundant_numpy_import(self):
+        from agent.tools import python_executor
+
+        result = python_executor.invoke(
+            {
+                "code": """```
+import numpy as np
+A = np.array([[4, 5], [3, 1]])
+b = np.array([-6, -2])
+x, y = np.linalg.solve(A, b)
+print(f"x = {round(float(x), 6)}, y = {round(float(y), 6)}")
+```"""
+            }
+        )
+
+        self.assertIn("x = -0.363636", result)
+        self.assertIn("y = -0.909091", result)
+
+    def test_python_executor_repairs_flattened_fenced_numpy_code(self):
+        from agent.tools import python_executor
+
+        result = python_executor.invoke(
+            {
+                "code": (
+                    "``` import numpy as np "
+                    "# Coefficients of the equations A = np.array([[4, 5], [3, 1]]) "
+                    "b = np.array([-6, -2]) "
+                    "# Solve the system of equations x, y = np.linalg.solve(A, b) "
+                    'print(f"x = {round(float(x), 6)}, y = {round(float(y), 6)}") ```'
+                )
+            }
+        )
+
+        self.assertIn("x = -0.363636", result)
+        self.assertIn("y = -0.909091", result)
+
+    def test_python_executor_allows_safe_builtins_and_blocks_imports(self):
+        from agent.tools import python_executor
+
+        self.assertEqual(
+            python_executor.invoke({"code": "print(sum(range(10)))"}), "45"
+        )
+        self.assertEqual(python_executor.invoke({"code": "print(len([1,2,3]))"}), "3")
+        self.assertTrue(
+            python_executor.invoke({"code": "import os"}).startswith("Error:")
+        )
 
     def test_web_search_compacts_retrieved_context(self):
         from agent.tools import web_search
@@ -61,15 +156,25 @@ class ToolTests(unittest.TestCase):
             with patch("agent.tools.TavilyClient") as client_class:
                 client_class.return_value.search.return_value = {
                     "results": [
-                        {"title": "One", "url": "https://one.test", "content": long_snippet},
+                        {
+                            "title": "One",
+                            "url": "https://one.test",
+                            "content": long_snippet,
+                        },
                         {"title": "Two", "url": "https://two.test", "content": "short"},
-                        {"title": "Three", "url": "https://three.test", "content": "extra"},
+                        {
+                            "title": "Three",
+                            "url": "https://three.test",
+                            "content": "extra",
+                        },
                     ]
                 }
 
                 result = web_search.invoke({"query": "ai agents"})
 
-        client_class.return_value.search.assert_called_once_with(query="ai agents", max_results=2)
+        client_class.return_value.search.assert_called_once_with(
+            query="ai agents", max_results=2
+        )
         self.assertIn("1. One", result)
         self.assertIn("2. Two", result)
         self.assertNotIn("3. Three", result)
@@ -97,7 +202,9 @@ class ShortcutTests(unittest.TestCase):
     def test_compound_growth_uses_calculator_shortcut(self):
         from agent.shortcuts import try_shortcut
 
-        shortcut = try_shortcut("Calculate the compound growth of $10,000 at 8% for 5 years.")
+        shortcut = try_shortcut(
+            "Calculate the compound growth of $10,000 at 8% for 5 years."
+        )
 
         self.assertIsNotNone(shortcut)
         self.assertEqual(shortcut.step["action"], "calculator")
@@ -148,7 +255,9 @@ class GraphTests(unittest.TestCase):
         from agent.graph import _requires_web_search
 
         with patch.dict(os.environ, {"REACT_AGENT_DISABLE_WEB_SEARCH_GATE": "1"}):
-            self.assertFalse(_requires_web_search("what is the latest version of python"))
+            self.assertFalse(
+                _requires_web_search("what is the latest version of python")
+            )
 
     def test_graph_runs_tool_then_returns_final_answer(self):
         from agent.graph import build_graph
@@ -174,6 +283,108 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(final_state["iteration_count"], 1)
         self.assertEqual(final_state["intermediate_steps"][0]["action"], "calculator")
         self.assertEqual(final_state["intermediate_steps"][0]["observation"], "42")
+
+    def test_graph_normalizes_fenced_python_executor_input_in_trace(self):
+        from agent.graph import build_graph
+
+        llm = ScriptedLLM(
+            [
+                "Thought: Need sympy.\n"
+                "Action: python_executor\n"
+                "Action Input: ```python\n"
+                "from sympy import symbols, Eq, solve\n"
+                "x, y = symbols('x y')\n"
+                "print(solve((Eq(4*x + 5*y + 6, 0), Eq(3*x + y + 2, 0)), (x, y)))\n"
+                "```",
+                "Thought: I have the answer.\nFinal Answer: x = -4/11, y = -10/11",
+            ]
+        )
+        graph = build_graph(llm=llm)
+
+        final_state = graph.invoke(
+            {
+                "messages": [HumanMessage(content="Solve the system")],
+                "intermediate_steps": [],
+                "iteration_count": 0,
+                "final_answer": None,
+            }
+        )
+
+        action_input = final_state["intermediate_steps"][0]["action_input"]
+        observation = final_state["intermediate_steps"][0]["observation"]
+        self.assertNotIn("```", action_input)
+        self.assertNotIn("from sympy import", action_input)
+        self.assertIn("x: -4/11", observation)
+        self.assertIn("y: -10/11", observation)
+
+    def test_graph_normalizes_fenced_numpy_executor_input_in_trace(self):
+        from agent.graph import build_graph
+
+        llm = ScriptedLLM(
+            [
+                "Thought: Need numeric solve.\n"
+                "Action: python_executor\n"
+                "Action Input: ```\n"
+                "import numpy as np\n"
+                "A = np.array([[4, 5], [3, 1]])\n"
+                "b = np.array([-6, -2])\n"
+                "x, y = np.linalg.solve(A, b)\n"
+                'print(f"x = {round(float(x), 6)}, y = {round(float(y), 6)}")\n'
+                "```",
+                "Thought: I have the answer.\nFinal Answer: x = -4/11, y = -10/11",
+            ]
+        )
+        graph = build_graph(llm=llm)
+
+        final_state = graph.invoke(
+            {
+                "messages": [HumanMessage(content="Solve the system")],
+                "intermediate_steps": [],
+                "iteration_count": 0,
+                "final_answer": None,
+            }
+        )
+
+        action_input = final_state["intermediate_steps"][0]["action_input"]
+        observation = final_state["intermediate_steps"][0]["observation"]
+        self.assertNotIn("```", action_input)
+        self.assertNotIn("import numpy", action_input)
+        self.assertIn("x = -0.363636", observation)
+        self.assertIn("y = -0.909091", observation)
+
+    def test_graph_normalizes_flattened_fenced_python_executor_input_in_trace(self):
+        from agent.graph import build_graph
+
+        llm = ScriptedLLM(
+            [
+                "Thought: Need sympy.\n"
+                "Action: python_executor\n"
+                "Action Input: ``` from sympy import symbols, Eq, solve "
+                "# Declare the symbols x, y = symbols('x y') "
+                "# Define the equations eq1 = Eq(4*x + 5*y, -6) "
+                "eq2 = Eq(3*x + y, -2) "
+                "# Solve the system of equations solution = solve((eq1, eq2), (x, y)) "
+                "print(solution) ```",
+                "Thought: I have the answer.\nFinal Answer: x = -4/11, y = -10/11",
+            ]
+        )
+        graph = build_graph(llm=llm)
+
+        final_state = graph.invoke(
+            {
+                "messages": [HumanMessage(content="Solve the system")],
+                "intermediate_steps": [],
+                "iteration_count": 0,
+                "final_answer": None,
+            }
+        )
+
+        action_input = final_state["intermediate_steps"][0]["action_input"]
+        observation = final_state["intermediate_steps"][0]["observation"]
+        self.assertNotIn("```", action_input)
+        self.assertNotIn("from sympy import", action_input)
+        self.assertIn("x: -4/11", observation)
+        self.assertIn("y: -10/11", observation)
 
     def test_graph_system_prompt_includes_current_date_context(self):
         from agent.graph import build_graph
@@ -219,7 +430,9 @@ class GraphTests(unittest.TestCase):
             with patch.dict(TOOLS, {"web_search": fake_web_search}):
                 final_state = graph.invoke(
                     {
-                        "messages": [HumanMessage(content="what is the latest version of python")],
+                        "messages": [
+                            HumanMessage(content="what is the latest version of python")
+                        ],
                         "intermediate_steps": [],
                         "iteration_count": 0,
                         "final_answer": None,
@@ -263,7 +476,9 @@ class GraphTests(unittest.TestCase):
             with patch.dict(TOOLS, {"web_search": fake_web_search}):
                 final_state = graph.invoke(
                     {
-                        "messages": [HumanMessage(content="what is the latest version of python")],
+                        "messages": [
+                            HumanMessage(content="what is the latest version of python")
+                        ],
                         "intermediate_steps": [],
                         "iteration_count": 0,
                         "final_answer": None,
@@ -277,7 +492,10 @@ class GraphTests(unittest.TestCase):
             ["web_search", "web_search"],
         )
         self.assertIn("Download Python 3.14.4", final_state["final_answer"])
-        self.assertIn("repeating web_search would risk a loop", final_state["messages"][-1].content)
+        self.assertIn(
+            "repeating web_search would risk a loop",
+            final_state["messages"][-1].content,
+        )
 
 
 if __name__ == "__main__":

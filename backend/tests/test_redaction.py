@@ -37,7 +37,9 @@ class SecretRedactionTests(unittest.TestCase):
 
         self.assertGreaterEqual(logging.getLogger("httpx").level, logging.WARNING)
         self.assertGreaterEqual(logging.getLogger("httpcore").level, logging.WARNING)
-        self.assertGreaterEqual(logging.getLogger("uvicorn.access").level, logging.WARNING)
+        self.assertGreaterEqual(
+            logging.getLogger("uvicorn.access").level, logging.WARNING
+        )
 
 
 if __name__ == "__main__":

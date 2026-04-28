@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Callable
 
 import httpx
 from dotenv import load_dotenv
@@ -47,7 +47,9 @@ class FreeModelFallback:
                 errors.append(
                     f"{provider.name}: {type(exc).__name__}: {_safe_exception_message(exc)}"
                 )
-        raise RuntimeError("All free model providers failed: " + " | ".join(errors)) from None
+        raise RuntimeError(
+            "All free model providers failed: " + " | ".join(errors)
+        ) from None
 
 
 def load_model_environment() -> None:
@@ -68,7 +70,9 @@ def configured_model_info() -> list[ModelInfo]:
     models: list[ModelInfo] = []
     if os.getenv("GEMINI_API_KEY"):
         model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-        models.append(ModelInfo("gemini", "Gemini", model, _model_label("Gemini", model)))
+        models.append(
+            ModelInfo("gemini", "Gemini", model, _model_label("Gemini", model))
+        )
     if os.getenv("GROQ_API_KEY"):
         model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
         models.append(ModelInfo("groq", "Groq", model, _model_label("Groq", model)))
@@ -85,7 +89,9 @@ def configured_model_info() -> list[ModelInfo]:
     if os.getenv("OPENROUTER_API_KEY"):
         model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
         models.append(
-            ModelInfo("openrouter", "OpenRouter", model, _model_label("OpenRouter", model))
+            ModelInfo(
+                "openrouter", "OpenRouter", model, _model_label("OpenRouter", model)
+            )
         )
     if os.getenv("CF_ACCOUNT_ID") and os.getenv("CF_WORKERS_AI_TOKEN"):
         model = os.getenv("CF_WORKERS_AI_MODEL", "@cf/meta/llama-3-8b-instruct")
@@ -135,7 +141,8 @@ def _openai_compatible_messages(messages: list[BaseMessage]) -> list[dict[str, s
 
 def _gemini_prompt(messages: list[BaseMessage]) -> str:
     return "\n\n".join(
-        f"{_role_for_message(message).upper()}: {message.content}" for message in messages
+        f"{_role_for_message(message).upper()}: {message.content}"
+        for message in messages
     )
 
 
@@ -143,7 +150,9 @@ def _call_gemini(messages: list[BaseMessage]) -> str:
     api_key = os.environ["GEMINI_API_KEY"]
     model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    payload = {"contents": [{"role": "user", "parts": [{"text": _gemini_prompt(messages)}]}]}
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": _gemini_prompt(messages)}]}]
+    }
     response = httpx.post(url, params={"key": api_key}, json=payload, timeout=60)
     _raise_for_status(response, "gemini")
     data = response.json()

@@ -112,7 +112,9 @@ def _new_step(thought: str, action: str, action_input: str, observation: str) ->
 
 
 def _try_compound_growth(query: str, normalized_query: str) -> ShortcutResult | None:
-    if not any(word in normalized_query for word in ("compound", "growth", "juros", "invest")):
+    if not any(
+        word in normalized_query for word in ("compound", "growth", "juros", "invest")
+    ):
         return None
 
     match = re.search(
@@ -160,9 +162,17 @@ def _try_statistics(query: str, normalized_query: str) -> ShortcutResult | None:
         parts.append(f"mean: {_format_number(statistics.mean(numbers))}")
     if "median" in normalized_query or "mediana" in normalized_query:
         parts.append(f"median: {_format_number(statistics.median(numbers))}")
-    if "standard deviation" in normalized_query or "std" in normalized_query or "desvio" in normalized_query:
-        parts.append(f"sample standard deviation: {_format_number(statistics.stdev(numbers))}")
-        parts.append(f"population standard deviation: {_format_number(statistics.pstdev(numbers))}")
+    if (
+        "standard deviation" in normalized_query
+        or "std" in normalized_query
+        or "desvio" in normalized_query
+    ):
+        parts.append(
+            f"sample standard deviation: {_format_number(statistics.stdev(numbers))}"
+        )
+        parts.append(
+            f"population standard deviation: {_format_number(statistics.pstdev(numbers))}"
+        )
     if not parts:
         return None
 
@@ -241,7 +251,7 @@ def _try_arithmetic(query: str, normalized_query: str) -> ShortcutResult | None:
     return ShortcutResult(
         final_answer=result,
         step=_new_step(
-            "Use deterministic local calculator; no LLM needed.",
+            "Use deterministic calculator; no LLM needed.",
             "calculator",
             expression,
             result,
@@ -255,7 +265,9 @@ def _extract_arithmetic_expression(query: str, normalized_query: str) -> str | N
     normalized = re.sub(r"(?<=\d)\s*[xX]\s*(?=\d)", " * ", normalized)
     normalized = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", normalized)
 
-    if not has_math_intent and not re.fullmatch(r"[\d\s.,()+\-*/%*]+[?.!]?", normalized.strip()):
+    if not has_math_intent and not re.fullmatch(
+        r"[\d\s.,()+\-*/%*]+[?.!]?", normalized.strip()
+    ):
         return None
 
     candidates = re.findall(r"\d[\d\s.,()+\-*/%*]*\d", normalized)
@@ -271,11 +283,15 @@ def _extract_square_root_value(query: str, normalized_query: str) -> float | Non
     if match:
         return float(match.group("value"))
 
-    match = re.search(r"\bsqrt\s*\(\s*(?P<value>-?\d+(?:\.\d+)?)\s*\)", normalized_query)
+    match = re.search(
+        r"\bsqrt\s*\(\s*(?P<value>-?\d+(?:\.\d+)?)\s*\)", normalized_query
+    )
     if match:
         return float(match.group("value"))
 
-    match = re.search(r"\bsquare root of\s+(?P<value>-?\d+(?:\.\d+)?)", normalized_query)
+    match = re.search(
+        r"\bsquare root of\s+(?P<value>-?\d+(?:\.\d+)?)", normalized_query
+    )
     if match:
         return float(match.group("value"))
 

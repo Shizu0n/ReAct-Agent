@@ -6,8 +6,9 @@ import logging
 import time
 import uuid
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import AsyncIterator, Literal
+from typing import Any, AsyncIterator, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,7 +24,7 @@ from agent.graph import TOOLS, build_graph
 from agent.llms import configured_model_info
 from agent.redaction import configure_secure_logging
 from agent.shortcuts import ShortcutResult, try_contextual_shortcut, try_shortcut
-from agent.state import Step
+from agent.state import MaxIterationsError
 
 configure_secure_logging()
 logger = logging.getLogger("react_agent.api")
@@ -42,11 +43,11 @@ class QueryRequest(BaseModel):
 
 class AgentResponse(BaseModel):
     result: str
-    trace: list[Step]
+    trace: list[dict[str, Any]]
     total_time: float
     run_id: str
     answer: str
-    steps: list[Step]
+    steps: list[dict[str, Any]]
     tools_used: list[str]
     latency_ms: int
     status: str
@@ -92,7 +93,9 @@ async def log_requests(request: Request, call_next):
         response = await call_next(request)
     except Exception:
         elapsed = time.perf_counter() - started_at
-        logger.exception("%s %s -> 500 %.4fs", request.method, request.url.path, elapsed)
+        logger.exception(
+            "%s %s -> 500 %.4fs", request.method, request.url.path, elapsed
+        )
         raise
 
     elapsed = time.perf_counter() - started_at
@@ -113,7 +116,11 @@ def _history_messages(history: list[ChatMessageRequest]) -> list[BaseMessage]:
         content = item.content.strip()
         if not content:
             continue
-        messages.append(HumanMessage(content=content) if item.role == "user" else AIMessage(content=content))
+        messages.append(
+            HumanMessage(content=content)
+            if item.role == "user"
+            else AIMessage(content=content)
+        )
     return messages
 
 
@@ -143,8 +150,19 @@ def _store_response(response: AgentResponse) -> None:
 def _build_response(run_id: str, started_at: float, final_state: dict) -> AgentResponse:
     trace = final_state.get("intermediate_steps", [])
     result = final_state.get("final_answer") or ""
+    return _response_from_trace(run_id, started_at, result, trace)
+
+
+def _response_from_trace(
+    run_id: str,
+    started_at: float,
+    result: str,
+    trace: list[dict[str, Any]],
+) -> AgentResponse:
     total_time = time.perf_counter() - started_at
-    tools_used = list(dict.fromkeys(step["action"] for step in trace if step.get("action")))
+    tools_used = list(
+        dict.fromkeys(step["action"] for step in trace if step.get("action"))
+    )
 
     return AgentResponse(
         result=result,
@@ -157,6 +175,30 @@ def _build_response(run_id: str, started_at: float, final_state: dict) -> AgentR
         latency_ms=round(total_time * 1000),
         status="success",
     )
+
+
+def _final_trace_step(result: str) -> dict[str, Any]:
+    return {
+        "type": "final",
+        "thought": "Final answer ready.",
+        "action": None,
+        "action_input": None,
+        "observation": result,
+        "content": result,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _build_shortcut_response(
+    run_id: str,
+    started_at: float,
+    shortcut: ShortcutResult,
+) -> AgentResponse:
+    trace: list[dict[str, Any]] = [
+        shortcut.step,
+        _final_trace_step(shortcut.final_answer),
+    ]
+    return _response_from_trace(run_id, started_at, shortcut.final_answer, trace)
 
 
 def _shortcut_state(
@@ -178,9 +220,11 @@ def _run_agent(
     started_at: float,
     history: list[ChatMessageRequest] | None = None,
 ) -> AgentResponse:
-    shortcut = try_shortcut(query) or try_contextual_shortcut(query, _history_text(history))
+    shortcut = try_shortcut(query) or try_contextual_shortcut(
+        query, _history_text(history)
+    )
     if shortcut is not None:
-        response = _build_response(run_id, started_at, _shortcut_state(query, shortcut, history))
+        response = _build_shortcut_response(run_id, started_at, shortcut)
         _store_response(response)
         return response
 
@@ -196,10 +240,30 @@ def _sse_payload(
     content: str,
     step: int,
     tool: str | None = None,
+    action_input: str | None = None,
+    run_id: str | None = None,
+    started_at: float | None = None,
+    timestamp: str | None = None,
+    tools_used: list[str] | None = None,
+    status: str = "running",
 ) -> dict[str, str]:
-    payload: dict[str, object] = {"type": event_type, "content": content, "step": step}
+    payload: dict[str, Any] = {
+        "type": event_type,
+        "content": content,
+        "step": step,
+        "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
+        "status": status,
+    }
     if tool:
         payload["tool"] = tool
+    if action_input:
+        payload["action_input"] = action_input
+    if run_id:
+        payload["run_id"] = run_id
+    if started_at is not None:
+        payload["elapsed_ms"] = round((time.perf_counter() - started_at) * 1000)
+    if tools_used is not None:
+        payload["tools_used"] = tools_used
 
     return {
         "data": json.dumps(
@@ -215,35 +279,122 @@ async def _stream_agent(
     started_at: float,
     history: list[ChatMessageRequest] | None = None,
 ) -> AsyncIterator[dict[str, str]]:
-    shortcut = try_shortcut(query) or try_contextual_shortcut(query, _history_text(history))
+    shortcut = try_shortcut(query) or try_contextual_shortcut(
+        query, _history_text(history)
+    )
     if shortcut is not None:
-        response = _build_response(run_id, started_at, _shortcut_state(query, shortcut, history))
+        response = _build_shortcut_response(run_id, started_at, shortcut)
         _store_response(response)
-        yield _sse_payload("thought", shortcut.step["thought"], 1)
-        yield _sse_payload("action", shortcut.step["action"], 1)
-        yield _sse_payload("observation", shortcut.step["observation"], 1)
-        yield _sse_payload("final", response.result, 2)
+        yield _sse_payload(
+            "thought",
+            shortcut.step["thought"],
+            1,
+            run_id=run_id,
+            started_at=started_at,
+            timestamp=shortcut.step.get("timestamp"),
+        )
+        yield _sse_payload(
+            "action",
+            shortcut.step["action"],
+            1,
+            tool=shortcut.step["action"],
+            action_input=shortcut.step.get("action_input"),
+            run_id=run_id,
+            started_at=started_at,
+            timestamp=shortcut.step.get("timestamp"),
+        )
+        yield _sse_payload(
+            "observation",
+            shortcut.step["observation"],
+            1,
+            tool=shortcut.step["action"],
+            action_input=shortcut.step.get("action_input"),
+            run_id=run_id,
+            started_at=started_at,
+            timestamp=shortcut.step.get("timestamp"),
+        )
+        yield _sse_payload(
+            "final",
+            response.result,
+            2,
+            run_id=run_id,
+            started_at=started_at,
+            tools_used=response.tools_used,
+            status="success",
+        )
         return
 
     graph = build_graph()
     printed_steps = 0
     final_state = _initial_state(query, history)
 
-    for state in graph.stream(final_state, stream_mode="values"):
-        final_state = state
-        steps = state.get("intermediate_steps", [])
-        while printed_steps < len(steps):
-            step_number = printed_steps + 1
-            step = steps[printed_steps]
-            yield _sse_payload("thought", step["thought"], step_number)
-            yield _sse_payload("action", f"Executing {step['action']}.", step_number, step["action"])
-            yield _sse_payload("observation", step["observation"], step_number)
-            printed_steps += 1
-            await asyncio.sleep(0)
+    try:
+        for state in graph.stream(final_state, stream_mode="values"):
+            final_state = state
+            steps = state.get("intermediate_steps", [])
+            while printed_steps < len(steps):
+                step_number = printed_steps + 1
+                step = steps[printed_steps]
+                yield _sse_payload(
+                    "thought",
+                    step["thought"],
+                    step_number,
+                    run_id=run_id,
+                    started_at=started_at,
+                    timestamp=step.get("timestamp"),
+                )
+                yield _sse_payload(
+                    "action",
+                    f"Executing {step['action']}.",
+                    step_number,
+                    step["action"],
+                    action_input=step.get("action_input"),
+                    run_id=run_id,
+                    started_at=started_at,
+                    timestamp=step.get("timestamp"),
+                )
+                yield _sse_payload(
+                    "observation",
+                    step["observation"],
+                    step_number,
+                    step["action"],
+                    action_input=step.get("action_input"),
+                    run_id=run_id,
+                    started_at=started_at,
+                    timestamp=step.get("timestamp"),
+                )
+                printed_steps += 1
+                await asyncio.sleep(0)
+    except MaxIterationsError:
+        tools_used = list(
+            dict.fromkeys(
+                step["action"]
+                for step in final_state.get("intermediate_steps", [])
+                if step.get("action")
+            )
+        )
+        yield _sse_payload(
+            "final",
+            "Agent reached the step limit without a final answer.",
+            printed_steps + 1,
+            run_id=run_id,
+            started_at=started_at,
+            tools_used=tools_used,
+            status="error",
+        )
+        return
 
     response = _build_response(run_id, started_at, final_state)
     _store_response(response)
-    yield _sse_payload("final", response.result, printed_steps + 1)
+    yield _sse_payload(
+        "final",
+        response.result,
+        printed_steps + 1,
+        run_id=run_id,
+        started_at=started_at,
+        tools_used=response.tools_used,
+        status="success",
+    )
 
 
 async def _sse_response(iterator: AsyncIterator[dict[str, str]]) -> StreamingResponse:
@@ -266,7 +417,9 @@ async def run_agent(request: Request, payload: QueryRequest):
     run_id = uuid.uuid4().hex
     started_at = time.perf_counter()
     if payload.stream:
-        return await _sse_response(_stream_agent(payload.query, run_id, started_at, payload.history))
+        return await _sse_response(
+            _stream_agent(payload.query, run_id, started_at, payload.history)
+        )
     return _run_agent(payload.query, run_id, started_at, payload.history)
 
 

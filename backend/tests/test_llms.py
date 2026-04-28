@@ -73,7 +73,9 @@ class LlmSelectionTests(unittest.TestCase):
         from agent.llms import _raise_for_status
 
         secret = "test_gemini_status_error_secret"
-        request = httpx.Request("POST", f"https://example.test/v1beta/model?key={secret}")
+        request = httpx.Request(
+            "POST", f"https://example.test/v1beta/model?key={secret}"
+        )
         response = httpx.Response(
             403,
             request=request,
