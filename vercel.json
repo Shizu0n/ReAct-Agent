@@ -4,8 +4,32 @@
   "outputDirectory": "frontend/dist",
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/api/:path*",
       "destination": "/api/index.py"
+    },
+    {
+      "source": "/agent/:path*",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/run",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/health",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/config",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/trace/:path*",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/:path((?!assets/|.*\\..*).*)",
+      "destination": "/index.html"
     }
   ]
 }
