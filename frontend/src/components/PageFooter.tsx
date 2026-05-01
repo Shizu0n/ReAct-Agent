@@ -10,7 +10,7 @@ export function PageFooter() {
             href="https://shizu0n.vercel.app"
             className="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-[var(--text-tertiary)] transition-colors hover:text-[var(--accent-text)]"
           >
-            About
+            Portfolio Website
           </a>
           <a
             href="https://huggingface.co/Shizu0n"

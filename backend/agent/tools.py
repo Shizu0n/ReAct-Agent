@@ -15,6 +15,7 @@ _NUMPY_AVAILABLE = importlib.util.find_spec("numpy") is not None
 
 DEFAULT_TAVILY_MAX_RESULTS = 2
 DEFAULT_TAVILY_SNIPPET_CHARS = 360
+DEFAULT_PYTHON_EXECUTOR_TIMEOUT_SECONDS = 15
 
 _SAFE_IMPORT_STATEMENTS = (
     r"from\s+sympy\s+import\s+(?:symbols|Eq|solve|simplify|expand|factor|Rational)"
@@ -348,6 +349,12 @@ for name in list(_BLOCKED):
 builtins.exec = _safe_exec
 del builtins
 """.strip()
+    timeout_seconds = _env_int(
+        "PYTHON_EXECUTOR_TIMEOUT_SECONDS",
+        DEFAULT_PYTHON_EXECUTOR_TIMEOUT_SECONDS,
+        1,
+        60,
+    )
     tmp_path: str | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -367,11 +374,11 @@ del builtins
             [sys.executable, tmp_path],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=timeout_seconds,
             env={**os.environ, "PYTHONPATH": ""},
         )
     except subprocess.TimeoutExpired:
-        return "Error: execution timed out (10s limit)."
+        return f"Error: execution timed out ({timeout_seconds}s limit)."
     finally:
         if tmp_path is not None:
             try:

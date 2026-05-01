@@ -48,7 +48,7 @@ export function ChatPanel({ query, setQuery, state, loadingLabel, onSubmit, onCl
         ref={scrollerRef}
         className={clsx(
           'flex min-h-0 min-w-0 flex-1 flex-col gap-5 overflow-x-hidden px-4 pt-4 sm:px-6 lg:px-8',
-          hasConversation ? 'overflow-y-auto pb-20' : 'overflow-y-hidden pb-6',
+          hasConversation ? 'overflow-y-auto pb-6' : 'overflow-y-hidden pb-6',
         )}
       >
         {state.messages.length === 0 ? <EmptyChat onSubmit={onSubmit} /> : null}
@@ -206,8 +206,8 @@ function PromptSuggestions({
   }, [open])
 
   return (
-    <div className="pointer-events-none absolute bottom-[13.25rem] right-4 z-30 sm:right-6 lg:right-8">
-      <div className="pointer-events-auto">
+    <div className="relative z-30 flex justify-end px-3 pb-2 pt-2 sm:px-4 lg:px-8">
+      <div>
         <div ref={menuRef} className="relative">
           <button
             type="button"

@@ -59,6 +59,7 @@ SOURCE_FOLLOWUP_PATTERNS = (
 )
 WEB_SEARCH_GATE_DISABLE_ENV = "REACT_AGENT_DISABLE_WEB_SEARCH_GATE"
 MAX_CURRENT_FACT_WEB_SEARCHES = 2
+URL_PATTERN = re.compile(r"https?://[^\s)>\]]+")
 
 
 @dataclass
@@ -181,6 +182,25 @@ def _latest_web_search_observation(steps: list[Step]) -> str:
     return ""
 
 
+def _source_urls_from_observation(observation: str) -> list[str]:
+    urls = [url.rstrip(".,;:") for url in URL_PATTERN.findall(observation)]
+    return list(dict.fromkeys(urls))
+
+
+def _with_source_urls_if_needed(answer: str, steps: list[Step]) -> str:
+    if WEB_SEARCH_TOOL_NAME not in {step.get("action") for step in steps}:
+        return answer
+    if URL_PATTERN.search(answer):
+        return answer
+
+    urls = _source_urls_from_observation(_latest_web_search_observation(steps))
+    if not urls:
+        return answer
+
+    source_lines = "\n".join(f"- {url}" for url in urls[:3])
+    return f"{answer.rstrip()}\n\nSources:\n{source_lines}"
+
+
 def _forced_final_from_search_observation(observation: str) -> str:
     return (
         "Thought: I already searched the web and have current results; repeating "
@@ -240,6 +260,15 @@ def agent_node(state: AgentState, llm: Any) -> dict[str, Any]:
             _latest_web_search_observation(steps)
         )
         parsed = parse_react_response(content)
+
+    if parsed.final_answer is not None:
+        grounded_answer = _with_source_urls_if_needed(parsed.final_answer, steps)
+        if grounded_answer != parsed.final_answer:
+            content = (
+                f"Thought: {parsed.thought or 'Final answer grounded with source URLs.'}\n"
+                f"Final Answer: {grounded_answer}"
+            )
+            parsed = parse_react_response(content)
 
     ai_message = AIMessage(content=content, additional_kwargs={"react": asdict(parsed)})
     update: dict[str, Any] = {"messages": [ai_message]}

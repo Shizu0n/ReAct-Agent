@@ -405,6 +405,9 @@ class GraphTests(unittest.TestCase):
         self.assertIn("Current date:", system_prompt)
         self.assertIn("Dates before the current date are past dates", system_prompt)
         self.assertIn("do not repeat web_search", system_prompt)
+        self.assertIn("conversational ReAct chatbot", system_prompt)
+        self.assertIn("Tool contracts:", system_prompt)
+        self.assertNotIn("latest stable Python version 2024", system_prompt)
 
     def test_graph_forces_web_search_for_latest_version_final_answer_skip(self):
         from agent.graph import TOOLS, build_graph
@@ -449,6 +452,48 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(
             final_state["intermediate_steps"][0]["action_input"],
             "what is the latest version of python",
+        )
+
+    def test_graph_appends_source_urls_after_web_search_when_llm_omits_them(self):
+        from agent.graph import TOOLS, build_graph
+
+        class FakeWebSearch:
+            def invoke(self, payload):
+                return (
+                    "1. Python Downloads\n"
+                    "URL: https://www.python.org/downloads/\n"
+                    "Snippet: Download Python 3.14.4."
+                )
+
+        llm = ScriptedLLM(
+            [
+                "Thought: Need current data.\n"
+                "Action: web_search\n"
+                "Action Input: latest stable Python version",
+                "Thought: I checked the result.\n"
+                "Final Answer: The latest stable Python version is Python 3.14.4.",
+            ]
+        )
+        graph = build_graph(llm=llm)
+
+        with patch.dict(os.environ, {"REACT_AGENT_DISABLE_WEB_SEARCH_GATE": ""}):
+            with patch.dict(TOOLS, {"web_search": FakeWebSearch()}):
+                final_state = graph.invoke(
+                    {
+                        "messages": [
+                            HumanMessage(content="what is the latest version of python")
+                        ],
+                        "intermediate_steps": [],
+                        "iteration_count": 0,
+                        "final_answer": None,
+                    }
+                )
+
+        self.assertIn("Python 3.14.4", final_state["final_answer"])
+        self.assertIn("Sources:", final_state["final_answer"])
+        self.assertIn(
+            "https://www.python.org/downloads/",
+            final_state["final_answer"],
         )
 
     def test_graph_forces_web_search_for_explicit_search_request(self):
