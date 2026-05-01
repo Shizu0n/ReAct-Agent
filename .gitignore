@@ -5,6 +5,8 @@
 __pycache__/
 *.pyc
 .pycache_tmp/
+.pytest_cache/
+.ruff_cache/
 backend/.venv/
 backend/.env
 backend/.env.*
@@ -22,7 +24,11 @@ graphify-out/
 CLAUDE.md
 AGENTS.md
 *.log
-.dev-local-*.log
+.dev-*.log
 .vercel-dev-*.log
 .playwright-mcp
 .vercel
+REDESIGN.md
+PRODUCT.md
+DESIGN.md
+DESIGN.json

@@ -27,4 +27,4 @@ fi
                          fastapi==0.115.4 uvicorn==0.32.0 python-dotenv==1.0.1 \
                          tavily-python==0.5.0 slowapi==0.1.9 sse-starlette==2.1.3
 "$PYTHON_BIN" -m pip freeze > requirements.txt
-echo "✓ 01-react-agent workspace ready"
+echo "✓ react-agent workspace ready"

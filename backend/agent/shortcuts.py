@@ -17,45 +17,29 @@ class ShortcutResult:
 
 
 EXTERNAL_INTENT_WORDS = (
-    "atual",
-    "buscar",
     "current",
-    "hoje",
     "latest",
     "news",
-    "noticias",
-    "pesquise",
-    "procurar",
     "recent",
     "search",
-    "tendencias",
     "trends",
     "web",
 )
 MATH_INTENT_WORDS = (
     "calculate",
-    "calcule",
     "compute",
-    "quanto e",
-    "resolver",
     "solve",
     "what is",
 )
 STATS_INTENT_WORDS = (
-    "desvio",
     "mean",
-    "media",
     "median",
-    "mediana",
     "standard deviation",
     "std",
 )
 EXPLAIN_INTENT_WORDS = (
     "demonstrate",
     "explain",
-    "explique",
-    "passo",
-    "passos",
     "show work",
     "step",
     "steps",
@@ -158,14 +142,13 @@ def _try_statistics(query: str, normalized_query: str) -> ShortcutResult | None:
         return None
 
     parts: list[str] = []
-    if "mean" in normalized_query or "media" in normalized_query:
+    if "mean" in normalized_query:
         parts.append(f"mean: {_format_number(statistics.mean(numbers))}")
-    if "median" in normalized_query or "mediana" in normalized_query:
+    if "median" in normalized_query:
         parts.append(f"median: {_format_number(statistics.median(numbers))}")
     if (
         "standard deviation" in normalized_query
         or "std" in normalized_query
-        or "desvio" in normalized_query
     ):
         parts.append(
             f"sample standard deviation: {_format_number(statistics.stdev(numbers))}"
@@ -305,13 +288,11 @@ def _wants_explanation(normalized_query: str) -> bool:
 def _is_explanation_followup(normalized_query: str) -> bool:
     followup_terms = (
         "explain more",
-        "explique mais",
-        "mais detalhes",
+        "more details",
         "more steps",
         "show the steps",
         "the steps",
-        "os passos",
-        "passo a passo",
+        "step by step",
     )
     return any(term in normalized_query for term in followup_terms)
 

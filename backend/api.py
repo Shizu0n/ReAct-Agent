@@ -468,7 +468,14 @@ async def serve_frontend(path: str = ""):
 
     dist_root = DIST_DIR.resolve()
     requested_file = (dist_root / path).resolve()
-    if requested_file.is_file() and dist_root in requested_file.parents:
+
+    # Strict path traversal protection: ensure requested file is within dist_root
+    try:
+        requested_file.relative_to(dist_root)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if requested_file.is_file():
         return FileResponse(requested_file)
 
     index_file = dist_root / "index.html"

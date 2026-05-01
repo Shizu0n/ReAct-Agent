@@ -68,7 +68,7 @@ _PYTHON_EXECUTOR_BLOCKED_ATTRIBUTES = {
     "ctypeslib",
 }
 _PYTHON_EXECUTOR_STATUS_PATTERN = re.compile(
-    r"\s*\[(?:Aguardando a resposta do python_executor|Waiting for python_executor response)\.\.\.\]\s*$",
+    r"\s*\[Waiting for python_executor response\.\.\.\]\s*$",
     flags=re.IGNORECASE,
 )
 

@@ -45,6 +45,18 @@ CURRENT_FACT_PATTERNS = (
     r"\bis\s+.+\s+(?:still|now|currently)\b",
     r"\b(?:price|stock|news|today|this year|2024|2025|2026)\b",
 )
+EXTERNAL_LOOKUP_PATTERNS = (
+    r"\bsearch(?:\s+the\s+web)?\b",
+    r"\blook\s+up\b",
+    r"\bfind\s+(?:sources|references|current|latest)\b",
+    r"\b(?:sources?|citations?|references?)\b",
+    r"\bpublic\s+documentation\b",
+)
+SOURCE_FOLLOWUP_PATTERNS = (
+    r"\b(?:sources?|citations?|references?)\b",
+    r"\bwhere\s+did\s+.+\s+come\s+from\b",
+    r"\bverify\s+the\s+last\s+answer\b",
+)
 WEB_SEARCH_GATE_DISABLE_ENV = "REACT_AGENT_DISABLE_WEB_SEARCH_GATE"
 MAX_CURRENT_FACT_WEB_SEARCHES = 2
 
@@ -99,6 +111,19 @@ def _last_user_message(messages: list[BaseMessage]) -> str:
     return ""
 
 
+def _previous_user_subject(messages: list[BaseMessage]) -> str:
+    for message in reversed(messages[:-1]):
+        content = str(message.content).strip()
+        if (
+            isinstance(message, HumanMessage)
+            and content
+            and not content.startswith("Observation:")
+            and not _is_source_followup(content)
+        ):
+            return content
+    return ""
+
+
 def _web_search_gate_disabled() -> bool:
     return os.getenv(WEB_SEARCH_GATE_DISABLE_ENV, "").lower() in {"1", "true", "yes"}
 
@@ -109,8 +134,23 @@ def _requires_web_search(query: str) -> bool:
 
     return any(
         re.search(pattern, query, flags=re.IGNORECASE)
-        for pattern in CURRENT_FACT_PATTERNS
+        for pattern in (*CURRENT_FACT_PATTERNS, *EXTERNAL_LOOKUP_PATTERNS)
     )
+
+
+def _is_source_followup(query: str) -> bool:
+    return any(
+        re.search(pattern, query, flags=re.IGNORECASE)
+        for pattern in SOURCE_FOLLOWUP_PATTERNS
+    )
+
+
+def _web_search_action_input(query: str, messages: list[BaseMessage]) -> str:
+    if _is_source_followup(query):
+        previous_subject = _previous_user_subject(messages)
+        if previous_subject:
+            return f"{previous_subject} sources"
+    return query
 
 
 def _runtime_system_prompt() -> str:
@@ -122,7 +162,11 @@ def _runtime_system_prompt() -> str:
         "- Dates before the current date are past dates, not future dates.\n"
         "- For current-fact questions, answer from web_search observations after "
         "you have relevant results; do not repeat web_search just because your "
-        "training knowledge feels inconsistent."
+        "training knowledge feels inconsistent.\n"
+        "- If the user explicitly asks to search, cite sources, list sources, "
+        "verify with public documentation, or provide references, use web_search "
+        "before answering. If it is a follow-up, search for sources about the "
+        "previous substantive user request."
     )
 
 
@@ -177,11 +221,14 @@ def agent_node(state: AgentState, llm: Any) -> dict[str, Any]:
         and not steps
         and _requires_web_search(latest_query)
     ):
+        action_input = _web_search_action_input(
+            latest_query, state.get("messages", [])
+        )
         content = (
             "Thought: I must search the web before answering this - my training "
-            "data may be outdated.\n"
+            "data may be outdated or the user explicitly asked for sources.\n"
             "Action: web_search\n"
-            f"Action Input: {latest_query}"
+            f"Action Input: {action_input}"
         )
         parsed = parse_react_response(content)
     elif (

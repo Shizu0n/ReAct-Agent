@@ -1,107 +1,132 @@
-const nodes = [
-  { id: 'thought', label: 'THOUGHT', caption: 'reason', x: 240, y: 70, w: 150, h: 58 },
-  { id: 'action', label: 'ACTION', caption: 'tool call', x: 78, y: 322, w: 142, h: 58 },
-  { id: 'observe', label: 'OBSERVE', caption: 'result', x: 420, y: 322, w: 150, h: 58 },
-  { id: 'llm', label: 'LLM', caption: 'loop core', x: 268, y: 210, w: 104, h: 74 },
+import { useEffect, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
+import { Check, Search, Terminal, Timer } from 'lucide-react'
+import clsx from 'clsx'
+
+const stages = [
+  {
+    key: 'thought',
+    label: 'Thought',
+    title: 'Classify the request',
+    body: 'Current-fact question. Cached confidence is not evidence.',
+    meta: 'needs source',
+  },
+  {
+    key: 'action',
+    label: 'Action',
+    title: 'Call the search tool',
+    body: 'web_search({ query: "Python latest stable release" })',
+    meta: 'tool: web_search',
+  },
+  {
+    key: 'observe',
+    label: 'Observe',
+    title: 'Read returned evidence',
+    body: 'Release notes and dates replace model memory.',
+    meta: 'sources parsed',
+  },
+  {
+    key: 'final',
+    label: 'Final',
+    title: 'Answer with caveats',
+    body: 'Summarize the version, cite the basis, flag uncertainty.',
+    meta: 'ready',
+  },
 ] as const
 
-const paths = [
-  {
-    id: 'thought-action',
-    label: 'plan',
-    d: 'M252 130 C218 178 170 244 150 318',
-  },
-  {
-    id: 'action-observe',
-    label: 'execute',
-    d: 'M222 350 C286 390 360 390 418 350',
-  },
-  {
-    id: 'observe-thought',
-    label: 'feedback',
-    d: 'M500 318 C480 235 420 166 378 130',
-  },
-  {
-    id: 'llm-pulse',
-    label: 'reasoning core',
-    d: 'M318 208 C305 180 305 154 318 130 M318 286 C318 302 318 314 318 322',
-  },
-] as const
+type StageKey = (typeof stages)[number]['key']
 
-const particleLoopPath =
-  'M252 130 C218 178 170 244 150 318 C178 372 326 406 418 350 C476 308 465 210 378 130 C340 104 288 106 252 130'
-
-const particles = [
-  { id: 'lead', begin: '0s', radius: 4.4 },
-  { id: 'mid', begin: '-1.8s', radius: 3.8 },
-  { id: 'tail', begin: '-3.6s', radius: 3.2 },
-] as const
+const stageIcon: Record<StageKey, typeof Timer> = {
+  thought: Timer,
+  action: Terminal,
+  observe: Search,
+  final: Check,
+}
 
 export function AgentFlowPreview() {
+  const [activeIndex, setActiveIndex] = useState(0)
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setActiveIndex((current) => (current + 1) % stages.length)
+    }, 1700)
+
+    return () => window.clearInterval(interval)
+  }, [])
+
+  const activeStage = stages[activeIndex]
+  const progress = ((activeIndex + 1) / stages.length) * 100
+
   return (
     <div className="agent-flow-shell" aria-label="Animated ReAct reasoning flow">
       <div className="agent-flow-status">
         <span className="agent-flow-status-dot" />
-        <span>react loop</span>
+        <span>live run replay</span>
       </div>
 
-      <svg className="react-loop-map" viewBox="0 0 660 520" role="img" aria-hidden="true">
-        <defs>
-          <linearGradient id="loopLine" x1="0%" x2="100%" y1="0%" y2="0%">
-            <stop offset="0%" stopColor="rgba(103,232,249,0.08)" />
-            <stop offset="52%" stopColor="rgba(103,232,249,0.55)" />
-            <stop offset="100%" stopColor="rgba(165,180,252,0.12)" />
-          </linearGradient>
-          <filter id="loopGlow" x="-40%" y="-40%" width="180%" height="180%">
-            <feGaussianBlur stdDeviation="3.5" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          <marker id="loopArrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
-            <path d="M0,0 L8,4 L0,8 Z" fill="rgba(103,232,249,0.62)" />
-          </marker>
-        </defs>
+      <div className="agent-flow-query">
+        <span>User asks</span>
+        <p>What changed in the latest Python release?</p>
+      </div>
 
-        <g className="loop-orbit" filter="url(#loopGlow)">
-          {paths.map((path) => (
-            <path key={path.id} d={path.d} markerEnd={path.id === 'llm-pulse' ? undefined : 'url(#loopArrow)'} />
-          ))}
-        </g>
+      <div className="agent-flow-progress" aria-hidden="true">
+        <motion.span
+          animate={{ width: `${progress}%` }}
+          transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+        />
+      </div>
 
-        <g className="loop-particles" filter="url(#loopGlow)">
-          {particles.map((particle) => (
-            <circle key={particle.id} r={particle.radius}>
-              <animateMotion
-                begin={particle.begin}
-                dur="5.4s"
-                repeatCount="indefinite"
-                path={particleLoopPath}
-              />
-            </circle>
-          ))}
-        </g>
+      <div className="agent-flow-thread">
+        {stages.map((stage, index) => {
+          const Icon = stageIcon[stage.key]
+          const active = index === activeIndex
+          const complete = index < activeIndex
 
-        <g className="llm-breath" filter="url(#loopGlow)">
-          <circle cx="320" cy="248" r="58" />
-          <circle cx="320" cy="248" r="82" />
-        </g>
+          return (
+            <motion.div
+              key={stage.key}
+              className={clsx(
+                'agent-flow-step',
+                `agent-flow-step-${stage.key}`,
+                active && 'agent-flow-step-active',
+                complete && 'agent-flow-step-complete',
+              )}
+              animate={{
+                opacity: active ? 1 : complete ? 0.72 : 0.48,
+                y: active ? -2 : 0,
+              }}
+              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <div className="agent-flow-step-marker">
+                <Icon className="h-3.5 w-3.5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="agent-flow-step-head">
+                  <span>{stage.label}</span>
+                  <span>{stage.meta}</span>
+                </div>
+                <h3>{stage.title}</h3>
+                <p>{stage.body}</p>
+              </div>
+            </motion.div>
+          )
+        })}
+      </div>
 
-        <g className="loop-nodes">
-          {nodes.map((node) => (
-            <g key={node.id} className={`loop-node loop-node-${node.id}`}>
-              <rect x={node.x} y={node.y} width={node.w} height={node.h} rx="12" />
-              <text className="loop-node-label" x={node.x + node.w / 2} y={node.y + 25} textAnchor="middle">
-                {node.label}
-              </text>
-              <text className="loop-node-caption" x={node.x + node.w / 2} y={node.y + 43} textAnchor="middle">
-                {node.caption}
-              </text>
-            </g>
-          ))}
-        </g>
-      </svg>
+      <div className="agent-flow-inspector">
+        <span>Current frame</span>
+        <AnimatePresence mode="wait">
+          <motion.code
+            key={activeStage.key}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.22 }}
+          >
+            {activeStage.label.toLowerCase()} / {activeStage.meta}
+          </motion.code>
+        </AnimatePresence>
+      </div>
     </div>
   )
 }

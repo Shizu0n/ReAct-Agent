@@ -181,7 +181,7 @@ def _call_openrouter(messages: list[BaseMessage]) -> str:
     headers = {
         "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
         "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost"),
-        "X-Title": os.getenv("OPENROUTER_APP_NAME", "01-react-agent"),
+        "X-Title": os.getenv("OPENROUTER_APP_NAME", "react-agent"),
     }
     payload = {
         "model": os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free"),

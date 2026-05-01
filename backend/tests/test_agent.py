@@ -451,6 +451,97 @@ class GraphTests(unittest.TestCase):
             "what is the latest version of python",
         )
 
+    def test_graph_forces_web_search_for_explicit_search_request(self):
+        from agent.graph import TOOLS, build_graph
+
+        class FakeWebSearch:
+            def __init__(self):
+                self.calls = []
+
+            def invoke(self, payload):
+                self.calls.append(payload)
+                return "LangGraph documentation result with source URL."
+
+        fake_web_search = FakeWebSearch()
+        llm = ScriptedLLM(
+            [
+                "Thought: I know this from memory.\nFinal Answer: LangGraph is a graph framework.",
+                "Thought: I checked the web result.\nFinal Answer: LangGraph source-backed summary.",
+            ]
+        )
+        graph = build_graph(llm=llm)
+
+        with patch.dict(os.environ, {"REACT_AGENT_DISABLE_WEB_SEARCH_GATE": ""}):
+            with patch.dict(TOOLS, {"web_search": fake_web_search}):
+                final_state = graph.invoke(
+                    {
+                        "messages": [
+                            HumanMessage(
+                                content="Search for LangGraph and summarize what it is"
+                            )
+                        ],
+                        "intermediate_steps": [],
+                        "iteration_count": 0,
+                        "final_answer": None,
+                    }
+                )
+
+        self.assertEqual(
+            fake_web_search.calls,
+            [{"query": "Search for LangGraph and summarize what it is"}],
+        )
+        self.assertEqual(final_state["final_answer"], "LangGraph source-backed summary.")
+        self.assertEqual(final_state["intermediate_steps"][0]["action"], "web_search")
+
+    def test_graph_uses_previous_subject_for_source_followup(self):
+        from agent.graph import TOOLS, build_graph
+
+        class FakeWebSearch:
+            def __init__(self):
+                self.calls = []
+
+            def invoke(self, payload):
+                self.calls.append(payload)
+                return "LangGraph source list with URLs."
+
+        fake_web_search = FakeWebSearch()
+        llm = ScriptedLLM(
+            [
+                "Thought: I can answer from memory.\nFinal Answer: I did not use external sources.",
+                "Thought: I checked the source result.\nFinal Answer: Sources listed.",
+            ]
+        )
+        graph = build_graph(llm=llm)
+
+        with patch.dict(os.environ, {"REACT_AGENT_DISABLE_WEB_SEARCH_GATE": ""}):
+            with patch.dict(TOOLS, {"web_search": fake_web_search}):
+                final_state = graph.invoke(
+                    {
+                        "messages": [
+                            HumanMessage(
+                                content="Search for LangGraph and summarize what it is"
+                            ),
+                            AIMessage(content="LangGraph is a framework for graphs."),
+                            HumanMessage(
+                                content="List the sources used and what each one contributed"
+                            ),
+                        ],
+                        "intermediate_steps": [],
+                        "iteration_count": 0,
+                        "final_answer": None,
+                    }
+                )
+
+        self.assertEqual(
+            fake_web_search.calls,
+            [{"query": "Search for LangGraph and summarize what it is sources"}],
+        )
+        self.assertEqual(final_state["final_answer"], "Sources listed.")
+        self.assertEqual(
+            final_state["intermediate_steps"][0]["action_input"],
+            "Search for LangGraph and summarize what it is sources",
+        )
+
     def test_graph_forces_final_after_repeated_current_fact_web_searches(self):
         from agent.graph import TOOLS, build_graph
 

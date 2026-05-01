@@ -24,7 +24,7 @@ export function ScrollCue({ hidden = false }: ScrollCueProps) {
     <AnimatePresence>
       {!dismissed && !hidden ? (
         <motion.div
-          className="pointer-events-none absolute bottom-8 left-1/2 flex -translate-x-1/2 items-center gap-2 font-mono text-[0.68rem] uppercase tracking-[0.18em] text-[#71717a]"
+          className="pointer-events-none absolute bottom-8 left-1/2 flex -translate-x-1/2 items-center gap-2 font-mono text-[0.65rem] uppercase tracking-[0.18em] text-[var(--text-tertiary)]"
           initial={{ opacity: 0, y: -4 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: 8 }}

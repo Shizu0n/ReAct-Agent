@@ -36,8 +36,8 @@ const components: Components = {
           customStyle={{
             margin: '0.85rem 0',
             borderRadius: '0.85rem',
-            border: '1px solid rgba(255,255,255,0.08)',
-            background: 'rgba(7,10,18,0.96)',
+            border: '1px solid var(--border-subtle)',
+            background: 'var(--bg-tertiary)',
             fontSize: '0.82rem',
           }}
         >
@@ -47,30 +47,30 @@ const components: Components = {
     }
 
     return (
-      <code className="rounded border border-white/10 bg-white/[0.07] px-1.5 py-0.5 font-mono text-[0.84em] text-[var(--accent-cyan)]" {...props}>
+      <code className="rounded border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[0.84em] text-[var(--accent-cyan)]" {...props}>
         {children}
       </code>
     )
   },
   a({ children, ...props }) {
     return (
-      <a className="text-[var(--accent-cyan)] underline decoration-white/20 underline-offset-4 hover:text-white" {...props}>
+      <a className="text-[var(--accent-cyan)] underline decoration-[var(--border-strong)] underline-offset-4 hover:text-[var(--accent-text)]" {...props}>
         {children}
       </a>
     )
   },
   table({ children }) {
     return (
-      <div className="my-3 overflow-x-auto rounded-xl border border-white/10">
-        <table className="min-w-full divide-y divide-white/10 text-left">{children}</table>
+      <div className="my-3 overflow-x-auto rounded-xl border border-[var(--border-subtle)]">
+        <table className="min-w-full divide-y divide-[var(--border-subtle)] text-left">{children}</table>
       </div>
     )
   },
   th({ children }) {
-    return <th className="bg-white/[0.04] px-3 py-2 font-mono text-[0.72rem] uppercase text-[#cbd5e1]">{children}</th>
+    return <th className="bg-[var(--bg-tertiary)] px-3 py-2 font-mono text-[0.72rem] uppercase text-[var(--text-primary)]">{children}</th>
   },
   td({ children }) {
-    return <td className="border-t border-white/10 px-3 py-2 text-[#d7dde8]">{children}</td>
+    return <td className="border-t border-[var(--border-subtle)] px-3 py-2 text-[var(--text-secondary)]">{children}</td>
   },
 }
 

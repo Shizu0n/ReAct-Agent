@@ -30,8 +30,8 @@ export function DemoSection({ state, sendQuery }: DemoSectionProps) {
   }
 
   return (
-    <section id="demo" className="relative overflow-hidden bg-black py-[10vh]">
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300/30 to-transparent" />
+    <section id="demo" className="relative overflow-hidden bg-[var(--bg-primary)] py-[10vh]">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[var(--accent-cyan)]/20 to-transparent" />
       <div className="mx-auto max-w-[1200px] px-[clamp(1.25rem,4vw,3rem)]">
         <SectionHeader
           kicker="Live Demo"
@@ -57,13 +57,13 @@ export function DemoSection({ state, sendQuery }: DemoSectionProps) {
 function SectionHeader({ kicker, title, body }: { kicker: string; title: string; body: string }) {
   return (
     <div className="mx-auto max-w-[920px]">
-      <p className="font-mono text-[0.72rem] uppercase tracking-[0.16em] text-[#6d7686]">
+      <p className="font-mono text-[0.7rem] uppercase tracking-[0.16em] text-[var(--text-tertiary)]">
         {kicker}
       </p>
-      <h2 className="mt-4 max-w-[12ch] text-[clamp(2.7rem,6vw,5.5rem)] font-semibold leading-[0.95] tracking-normal">
+      <h2 className="mt-4 max-w-[12ch] text-[clamp(2.5rem,6vw,5rem)] font-semibold leading-[0.95] tracking-tight text-white">
         {title}
       </h2>
-      <p className="mt-5 max-w-[42rem] text-[#9aa4b2] leading-[1.75]">{body}</p>
+      <p className="mt-5 max-w-[42rem] text-[var(--text-secondary)] leading-[1.75]">{body}</p>
     </div>
   )
 }

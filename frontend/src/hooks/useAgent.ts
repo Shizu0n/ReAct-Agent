@@ -1,5 +1,14 @@
 import { useEffect, useState } from 'react'
-import type { AgentConfig, AgentResponse, AgentState, Message, Step, StepType, StreamEvent } from '../types'
+import type {
+  AgentConfig,
+  AgentResponse,
+  AgentState,
+  Message,
+  RunSummary,
+  Step,
+  StepType,
+  StreamEvent,
+} from '../types'
 
 type SseParseResult = {
   events: string[]
@@ -8,13 +17,15 @@ type SseParseResult = {
 
 type ApiHistoryMessage = Pick<Message, 'role' | 'content'>
 
+type PersistedAgentSession = Pick<AgentState, 'messages' | 'steps' | 'runSummary'>
+
+const sessionStorageKey = 'react-agent:chat-session:v1'
+
 const initialState: AgentState = {
-  messages: [],
-  steps: [],
+  ...readPersistedSession(),
   isLoading: false,
   error: null,
   config: null,
-  runSummary: null,
   connectionStatus: 'checking',
 }
 
@@ -49,6 +60,89 @@ const mockSteps: Array<Omit<Step, 'timestamp'>> = [
 
 function timestamp(): string {
   return new Date().toISOString()
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function persistedMessages(value: unknown): Message[] {
+  if (!Array.isArray(value)) return []
+
+  return value.filter((message): message is Message => {
+    if (!isRecord(message)) return false
+    return (
+      typeof message.id === 'string' &&
+      (message.role === 'user' || message.role === 'assistant') &&
+      typeof message.content === 'string'
+    )
+  })
+}
+
+function persistedSteps(value: unknown): Step[] {
+  if (!Array.isArray(value)) return []
+
+  return value.filter((step): step is Step => {
+    if (!isRecord(step)) return false
+    return typeof step.step === 'number' && typeof step.timestamp === 'string'
+  })
+}
+
+function persistedRunSummary(value: unknown): RunSummary | null {
+  if (!isRecord(value) || !Array.isArray(value.tools_used)) return null
+
+  return {
+    run_id: typeof value.run_id === 'string' ? value.run_id : undefined,
+    elapsed_ms: typeof value.elapsed_ms === 'number' ? value.elapsed_ms : undefined,
+    tools_used: value.tools_used.filter((tool): tool is string => typeof tool === 'string'),
+    status:
+      value.status === 'running' || value.status === 'success' || value.status === 'error'
+        ? value.status
+        : undefined,
+  }
+}
+
+function readPersistedSession(): PersistedAgentSession {
+  if (typeof window === 'undefined') {
+    return { messages: [], steps: [], runSummary: null }
+  }
+
+  try {
+    const rawSession = window.localStorage.getItem(sessionStorageKey)
+    if (!rawSession) return { messages: [], steps: [], runSummary: null }
+
+    const parsed = JSON.parse(rawSession) as unknown
+    if (!isRecord(parsed)) return { messages: [], steps: [], runSummary: null }
+
+    return {
+      messages: persistedMessages(parsed.messages),
+      steps: persistedSteps(parsed.steps),
+      runSummary: persistedRunSummary(parsed.runSummary),
+    }
+  } catch {
+    window.localStorage.removeItem(sessionStorageKey)
+    return { messages: [], steps: [], runSummary: null }
+  }
+}
+
+function persistSession(session: PersistedAgentSession): void {
+  if (typeof window === 'undefined') return
+
+  const messages = session.messages.filter(
+    (message) => message.role === 'user' || message.content.trim().length > 0,
+  )
+  const normalizedSession: PersistedAgentSession = {
+    messages,
+    steps: session.steps,
+    runSummary: session.runSummary,
+  }
+
+  if (messages.length === 0 && session.steps.length === 0 && session.runSummary === null) {
+    window.localStorage.removeItem(sessionStorageKey)
+    return
+  }
+
+  window.localStorage.setItem(sessionStorageKey, JSON.stringify(normalizedSession))
 }
 
 function withTimestamp(step: Omit<Step, 'timestamp'>): Step {
@@ -230,6 +324,14 @@ async function requestErrorMessage(response: Response): Promise<string> {
 
 export function useAgent() {
   const [state, setState] = useState<AgentState>(initialState)
+
+  useEffect(() => {
+    persistSession({
+      messages: state.messages,
+      steps: state.steps,
+      runSummary: state.runSummary,
+    })
+  }, [state.messages, state.steps, state.runSummary])
 
   useEffect(() => {
     let cancelled = false
@@ -463,5 +565,17 @@ export function useAgent() {
     void runApi(trimmedQuery, assistantId, state.messages)
   }
 
-  return { state, sendQuery }
+  function clearHistory(): void {
+    if (state.isLoading) return
+
+    setState((current) => ({
+      ...current,
+      messages: [],
+      steps: [],
+      error: null,
+      runSummary: null,
+    }))
+  }
+
+  return { state, sendQuery, clearHistory }
 }
