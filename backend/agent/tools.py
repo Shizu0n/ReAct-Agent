@@ -15,7 +15,7 @@ _NUMPY_AVAILABLE = importlib.util.find_spec("numpy") is not None
 
 DEFAULT_TAVILY_MAX_RESULTS = 2
 DEFAULT_TAVILY_SNIPPET_CHARS = 360
-DEFAULT_PYTHON_EXECUTOR_TIMEOUT_SECONDS = 15
+DEFAULT_PYTHON_EXECUTOR_TIMEOUT_SECONDS = 30
 
 _SAFE_IMPORT_STATEMENTS = (
     r"from\s+sympy\s+import\s+(?:symbols|Eq|solve|simplify|expand|factor|Rational)"
@@ -40,6 +40,7 @@ _PYTHON_EXECUTOR_ALLOWED_IMPORTS = {
     "random",
     "itertools",
     "functools",
+    "sys",
     "sympy",
     "numpy",
 }
@@ -56,7 +57,6 @@ _PYTHON_EXECUTOR_BLOCKED_NAMES = {
     "setattr",
     "delattr",
     "builtins",
-    "sys",
 }
 _PYTHON_EXECUTOR_BLOCKED_ATTRIBUTES = {
     "CDLL",
@@ -67,6 +67,11 @@ _PYTHON_EXECUTOR_BLOCKED_ATTRIBUTES = {
     "WinDLL",
     "ctypes",
     "ctypeslib",
+    "modules",
+    "path",
+    "meta_path",
+    "path_hooks",
+    "path_importer_cache",
 }
 _PYTHON_EXECUTOR_STATUS_PATTERN = re.compile(
     r"\s*\[Waiting for python_executor response\.\.\.\]\s*$",
@@ -78,7 +83,7 @@ def normalize_python_code_input(code: str) -> str:
     """Remove common Markdown wrapping and redundant safe imports."""
     stripped = code.strip()
     stripped = _strip_executor_status_annotations(stripped)
-    fence_match = re.fullmatch(
+    fence_match = re.search(
         r"```\s*(?:python|py)?\s*(.*?)\s*```",
         stripped,
         flags=re.IGNORECASE | re.DOTALL,
@@ -254,7 +259,7 @@ def python_executor(code: str) -> str:
     Returns:
         Captured stdout with surrounding whitespace stripped. The execution
         environment exposes a safe whitelist of common builtins, plus math,
-        json, re, statistics, random, itertools, functools, numpy as np when
+        json, re, statistics, random, itertools, functools, sys, numpy as np when
         installed, and sympy helpers when installed. Markdown code fences and
         redundant safe imports for sympy/numpy are stripped before execution.
         Other imports and unsafe builtins such as open, eval, exec, compile,
@@ -301,7 +306,7 @@ _BLOCKED = {
     "globals", "locals", "vars", "getattr", "setattr", "delattr",
 }
 _ALLOWED_MODULES = {
-    "math", "json", "re", "statistics", "random",
+    "math", "json", "re", "statistics", "random", "sys",
     "itertools", "functools", "sympy", "numpy",
 }
 

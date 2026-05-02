@@ -57,6 +57,13 @@ SOURCE_FOLLOWUP_PATTERNS = (
     r"\bwhere\s+did\s+.+\s+come\s+from\b",
     r"\bverify\s+the\s+last\s+answer\b",
 )
+LOCAL_PYTHON_CHECK_PATTERNS = (
+    r"\bturn\s+this\s+into\s+.+python\s+(?:check|script|snippet)\b",
+    r"\bmake\s+(?:this|that|it)\s+.+python\s+(?:check|script|snippet)\b",
+    r"\bwrite\s+.+python\s+(?:check|script|snippet)\b",
+    r"\bpython\s+(?:check|script|snippet)\s+.+\b(?:run|use)\s+locally\b",
+    r"\bi\s+can\s+run\s+locally\b",
+)
 WEB_SEARCH_GATE_DISABLE_ENV = "REACT_AGENT_DISABLE_WEB_SEARCH_GATE"
 MAX_CURRENT_FACT_WEB_SEARCHES = 2
 URL_PATTERN = re.compile(r"https?://[^\s)>\]]+")
@@ -146,12 +153,61 @@ def _is_source_followup(query: str) -> bool:
     )
 
 
+def _is_local_python_check_request(query: str) -> bool:
+    if not re.search(r"\bpython\b", query, flags=re.IGNORECASE):
+        return False
+    return any(
+        re.search(pattern, query, flags=re.IGNORECASE)
+        for pattern in LOCAL_PYTHON_CHECK_PATTERNS
+    )
+
+
 def _web_search_action_input(query: str, messages: list[BaseMessage]) -> str:
     if _is_source_followup(query):
         previous_subject = _previous_user_subject(messages)
         if previous_subject:
             return f"{previous_subject} sources"
     return query
+
+
+def _local_python_check_answer(query: str, messages: list[BaseMessage]) -> str:
+    context = f"{_previous_user_subject(messages)}\n{query}".lower()
+    if "python" in context and any(
+        term in context for term in ("latest", "current version", "version")
+    ):
+        code = """import platform
+import re
+import urllib.request
+
+DOWNLOADS_URL = "https://www.python.org/downloads/"
+
+with urllib.request.urlopen(DOWNLOADS_URL, timeout=10) as response:
+    html = response.read().decode("utf-8", errors="replace")
+
+match = re.search(r"Download Python ([0-9]+(?:\\.[0-9]+)+)", html)
+if not match:
+    raise SystemExit("Could not find the latest Python version on python.org.")
+
+print(f"Latest python.org download: Python {match.group(1)}")
+print(f"Local interpreter: Python {platform.python_version()}")"""
+        return (
+            "Run this locally to compare the current python.org download with "
+            "your local interpreter:\n\n"
+            f"```python\n{code}\n```\n\n"
+            "Command:\n\n```bash\npython check_python_version.py\n```"
+        )
+
+    return (
+        "Use this local Python check as a starting point:\n\n"
+        "```python\n"
+        "def main():\n"
+        "    # Add the condition you want to verify here.\n"
+        "    print('Check passed')\n\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n"
+        "```\n\n"
+        "Command:\n\n```bash\npython check.py\n```"
+    )
 
 
 def _runtime_system_prompt() -> str:
@@ -261,6 +317,17 @@ def agent_node(state: AgentState, llm: Any) -> dict[str, Any]:
         )
         parsed = parse_react_response(content)
 
+    if (
+        parsed.action == PYTHON_EXECUTOR_TOOL_NAME
+        and _is_local_python_check_request(latest_query)
+    ):
+        content = (
+            "Thought: The user asked for Python code to run locally, not for "
+            "execution inside this agent sandbox.\n"
+            f"Final Answer: {_local_python_check_answer(latest_query, state.get('messages', []))}"
+        )
+        parsed = parse_react_response(content)
+
     if parsed.final_answer is not None:
         grounded_answer = _with_source_urls_if_needed(parsed.final_answer, steps)
         if grounded_answer != parsed.final_answer:
@@ -329,7 +396,7 @@ def should_continue(state: AgentState) -> str:
 def build_graph(llm: Any | None = None):
     active_llm = llm or _create_default_llm()
     workflow = StateGraph(AgentState)
-    workflow.add_node("agent_node", lambda state: agent_node(state, active_llm))
+    workflow.add_node("agent_node", lambda state: agent_node(state, active_llm))  # type: ignore
     workflow.add_node("tool_node", tool_node)
     workflow.add_edge(START, "agent_node")
     workflow.add_conditional_edges(

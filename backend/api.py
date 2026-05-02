@@ -324,11 +324,11 @@ async def _stream_agent(
         )
         return
 
-    graph = build_graph()
     printed_steps = 0
     final_state = _initial_state(query, history)
 
     try:
+        graph = build_graph()
         for state in graph.stream(final_state, stream_mode="values"):
             final_state = state
             steps = state.get("intermediate_steps", [])
@@ -380,6 +380,18 @@ async def _stream_agent(
             run_id=run_id,
             started_at=started_at,
             tools_used=tools_used,
+            status="error",
+        )
+        return
+    except Exception as exc:
+        logger.exception("Agent stream failed for run %s", run_id)
+        yield _sse_payload(
+            "final",
+            f"Agent failed before returning an answer: {type(exc).__name__}: {exc}",
+            printed_steps + 1,
+            run_id=run_id,
+            started_at=started_at,
+            tools_used=[],
             status="error",
         )
         return

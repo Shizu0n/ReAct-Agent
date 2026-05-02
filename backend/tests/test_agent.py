@@ -140,6 +140,21 @@ print(f"x = {round(float(x), 6)}, y = {round(float(y), 6)}")
             python_executor.invoke({"code": "import os"}).startswith("Error:")
         )
 
+    def test_python_executor_extracts_inline_fenced_code_and_allows_sys_version(self):
+        from agent.tools import python_executor
+
+        result = python_executor.invoke(
+            {
+                "code": (
+                    "```python import sys print(sys.version) ``` "
+                    "Please run this script locally."
+                )
+            }
+        )
+
+        self.assertNotIn("Error:", result)
+        self.assertRegex(result, r"\d+\.\d+\.\d+")
+
     def test_web_search_compacts_retrieved_context(self):
         from agent.tools import web_search
 
@@ -407,7 +422,49 @@ class GraphTests(unittest.TestCase):
         self.assertIn("do not repeat web_search", system_prompt)
         self.assertIn("conversational ReAct chatbot", system_prompt)
         self.assertIn("Tool contracts:", system_prompt)
+        self.assertIn("run locally", system_prompt)
         self.assertNotIn("latest stable Python version 2024", system_prompt)
+
+    def test_graph_does_not_execute_local_python_check_request(self):
+        from agent.graph import build_graph
+
+        llm = ScriptedLLM(
+            [
+                "Thought: I can draft a check.\n"
+                "Action: python_executor\n"
+                "Action Input: ```python import sys print(sys.version) ``` "
+                "Please run this locally.",
+            ]
+        )
+        graph = build_graph(llm=llm)
+
+        final_state = graph.invoke(
+            {
+                "messages": [
+                    HumanMessage(content="What is the latest Python version?"),
+                    AIMessage(
+                        content=(
+                            "The latest stable Python version is Python 3.14.4. "
+                            "Source: https://www.python.org/downloads/"
+                        )
+                    ),
+                    HumanMessage(
+                        content=(
+                            "turn this into a small python check i can run locally"
+                        )
+                    ),
+                ],
+                "intermediate_steps": [],
+                "iteration_count": 0,
+                "final_answer": None,
+            }
+        )
+
+        self.assertEqual(final_state["intermediate_steps"], [])
+        self.assertEqual(final_state["iteration_count"], 0)
+        self.assertIn("urllib.request", final_state["final_answer"])
+        self.assertIn("Latest python.org download", final_state["final_answer"])
+        self.assertIn("Local interpreter", final_state["final_answer"])
 
     def test_graph_forces_web_search_for_latest_version_final_answer_skip(self):
         from agent.graph import TOOLS, build_graph

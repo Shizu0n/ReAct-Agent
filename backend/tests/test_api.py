@@ -322,6 +322,24 @@ class ApiTests(unittest.TestCase):
         self.assertIn('"type": "final"', text)
         self.assertIn('"content": "42"', text)
 
+    def test_stream_run_reports_graph_startup_errors_as_final_event(self):
+        def raise_startup_error():
+            raise RuntimeError("No free model provider configured.")
+
+        self.api.build_graph = raise_startup_error
+
+        with self.client.stream(
+            "POST",
+            "/run",
+            json={"query": "hello", "stream": True},
+        ) as response:
+            self.assertEqual(response.status_code, 200)
+            text = "\n".join(response.iter_lines())
+
+        self.assertIn('"type": "final"', text)
+        self.assertIn('"status": "error"', text)
+        self.assertIn("No free model provider configured", text)
+
     def test_get_stream_run_supports_eventsource_clients(self):
         with self.client.stream(
             "GET",
