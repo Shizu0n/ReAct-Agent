@@ -197,74 +197,6 @@ print(f"x = {round(float(x), 6)}, y = {round(float(y), 6)}")
         self.assertNotIn("A" * 90, result)
 
 
-class ShortcutTests(unittest.TestCase):
-    def test_simple_arithmetic_uses_calculator_shortcut(self):
-        from agent.shortcuts import try_shortcut
-
-        shortcut = try_shortcut("What is 40 + 2?")
-
-        self.assertIsNotNone(shortcut)
-        self.assertEqual(shortcut.final_answer, "42")
-        self.assertEqual(shortcut.step["action"], "calculator")
-
-    def test_current_search_queries_do_not_use_shortcut(self):
-        from agent.shortcuts import try_shortcut
-
-        shortcut = try_shortcut("Search the latest AI agent trends and summarize them.")
-
-        self.assertIsNone(shortcut)
-
-    def test_compound_growth_uses_calculator_shortcut(self):
-        from agent.shortcuts import try_shortcut
-
-        shortcut = try_shortcut(
-            "Calculate the compound growth of $10,000 at 8% for 5 years."
-        )
-
-        self.assertIsNotNone(shortcut)
-        self.assertEqual(shortcut.step["action"], "calculator")
-        self.assertEqual(
-            shortcut.final_answer,
-            "The investment grows to about $14,693.28 after 5 years.",
-        )
-
-    def test_basic_statistics_uses_python_shortcut(self):
-        from agent.shortcuts import try_shortcut
-
-        shortcut = try_shortcut(
-            "Use Python to calculate the mean, median, and standard deviation of [12, 18, 21, 25, 31]."
-        )
-
-        self.assertIsNotNone(shortcut)
-        self.assertEqual(shortcut.step["action"], "python_executor")
-        self.assertIn("mean: 21.4", shortcut.final_answer)
-        self.assertIn("median: 21", shortcut.final_answer)
-        self.assertIn("sample standard deviation", shortcut.final_answer)
-
-    def test_square_root_shortcut_explains_steps(self):
-        from agent.shortcuts import try_shortcut
-
-        shortcut = try_shortcut("Calculate √1764 and explain the steps")
-
-        self.assertIsNotNone(shortcut)
-        self.assertEqual(shortcut.step["action"], "calculator")
-        self.assertEqual(shortcut.step["action_input"], "math.sqrt(1764)")
-        self.assertIn("√1764 = 42", shortcut.final_answer)
-        self.assertIn("42 × 42 = 1764", shortcut.final_answer)
-
-    def test_contextual_followup_explains_previous_square_root(self):
-        from agent.shortcuts import try_contextual_shortcut
-
-        shortcut = try_contextual_shortcut(
-            "explain more the steps",
-            ["Calculate √1764 and explain the steps", "√1764 = 42."],
-        )
-
-        self.assertIsNotNone(shortcut)
-        self.assertEqual(shortcut.step["action"], "calculator")
-        self.assertIn("42 × 42 = 1764", shortcut.final_answer)
-
-
 class GraphTests(unittest.TestCase):
     def test_web_search_gate_can_be_disabled_for_tests(self):
         from agent.graph import _requires_web_search
@@ -424,47 +356,6 @@ class GraphTests(unittest.TestCase):
         self.assertIn("Tool contracts:", system_prompt)
         self.assertIn("run locally", system_prompt)
         self.assertNotIn("latest stable Python version 2024", system_prompt)
-
-    def test_graph_does_not_execute_local_python_check_request(self):
-        from agent.graph import build_graph
-
-        llm = ScriptedLLM(
-            [
-                "Thought: I can draft a check.\n"
-                "Action: python_executor\n"
-                "Action Input: ```python import sys print(sys.version) ``` "
-                "Please run this locally.",
-            ]
-        )
-        graph = build_graph(llm=llm)
-
-        final_state = graph.invoke(
-            {
-                "messages": [
-                    HumanMessage(content="What is the latest Python version?"),
-                    AIMessage(
-                        content=(
-                            "The latest stable Python version is Python 3.14.4. "
-                            "Source: https://www.python.org/downloads/"
-                        )
-                    ),
-                    HumanMessage(
-                        content=(
-                            "turn this into a small python check i can run locally"
-                        )
-                    ),
-                ],
-                "intermediate_steps": [],
-                "iteration_count": 0,
-                "final_answer": None,
-            }
-        )
-
-        self.assertEqual(final_state["intermediate_steps"], [])
-        self.assertEqual(final_state["iteration_count"], 0)
-        self.assertIn("urllib.request", final_state["final_answer"])
-        self.assertIn("Latest python.org download", final_state["final_answer"])
-        self.assertIn("Local interpreter", final_state["final_answer"])
 
     def test_graph_forces_web_search_for_latest_version_final_answer_skip(self):
         from agent.graph import TOOLS, build_graph

@@ -23,7 +23,6 @@ from slowapi.util import get_remote_address
 from agent.graph import TOOLS, build_graph
 from agent.llms import configured_model_info
 from agent.redaction import configure_secure_logging
-from agent.shortcuts import ShortcutResult, try_contextual_shortcut, try_shortcut
 from agent.state import MaxIterationsError
 
 configure_secure_logging()
@@ -124,10 +123,6 @@ def _history_messages(history: list[ChatMessageRequest]) -> list[BaseMessage]:
     return messages
 
 
-def _history_text(history: list[ChatMessageRequest] | None = None) -> list[str]:
-    return [item.content for item in history or [] if item.content.strip()]
-
-
 def _initial_state(query: str, history: list[ChatMessageRequest] | None = None) -> dict:
     return {
         "messages": [*_history_messages(history or []), HumanMessage(content=query)],
@@ -177,57 +172,12 @@ def _response_from_trace(
     )
 
 
-def _final_trace_step(result: str) -> dict[str, Any]:
-    return {
-        "type": "final",
-        "thought": "Final answer ready.",
-        "action": None,
-        "action_input": None,
-        "observation": result,
-        "content": result,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-def _build_shortcut_response(
-    run_id: str,
-    started_at: float,
-    shortcut: ShortcutResult,
-) -> AgentResponse:
-    trace: list[dict[str, Any]] = [
-        shortcut.step,
-        _final_trace_step(shortcut.final_answer),
-    ]
-    return _response_from_trace(run_id, started_at, shortcut.final_answer, trace)
-
-
-def _shortcut_state(
-    query: str,
-    shortcut: ShortcutResult,
-    history: list[ChatMessageRequest] | None = None,
-) -> dict:
-    return {
-        "messages": [*_history_messages(history or []), HumanMessage(content=query)],
-        "intermediate_steps": [shortcut.step],
-        "iteration_count": 1,
-        "final_answer": shortcut.final_answer,
-    }
-
-
 def _run_agent(
     query: str,
     run_id: str,
     started_at: float,
     history: list[ChatMessageRequest] | None = None,
 ) -> AgentResponse:
-    shortcut = try_shortcut(query) or try_contextual_shortcut(
-        query, _history_text(history)
-    )
-    if shortcut is not None:
-        response = _build_shortcut_response(run_id, started_at, shortcut)
-        _store_response(response)
-        return response
-
     graph = build_graph()
     final_state = graph.invoke(_initial_state(query, history))
     response = _build_response(run_id, started_at, final_state)
@@ -279,51 +229,6 @@ async def _stream_agent(
     started_at: float,
     history: list[ChatMessageRequest] | None = None,
 ) -> AsyncIterator[dict[str, str]]:
-    shortcut = try_shortcut(query) or try_contextual_shortcut(
-        query, _history_text(history)
-    )
-    if shortcut is not None:
-        response = _build_shortcut_response(run_id, started_at, shortcut)
-        _store_response(response)
-        yield _sse_payload(
-            "thought",
-            shortcut.step["thought"],
-            1,
-            run_id=run_id,
-            started_at=started_at,
-            timestamp=shortcut.step.get("timestamp"),
-        )
-        yield _sse_payload(
-            "action",
-            shortcut.step["action"],
-            1,
-            tool=shortcut.step["action"],
-            action_input=shortcut.step.get("action_input"),
-            run_id=run_id,
-            started_at=started_at,
-            timestamp=shortcut.step.get("timestamp"),
-        )
-        yield _sse_payload(
-            "observation",
-            shortcut.step["observation"],
-            1,
-            tool=shortcut.step["action"],
-            action_input=shortcut.step.get("action_input"),
-            run_id=run_id,
-            started_at=started_at,
-            timestamp=shortcut.step.get("timestamp"),
-        )
-        yield _sse_payload(
-            "final",
-            response.result,
-            2,
-            run_id=run_id,
-            started_at=started_at,
-            tools_used=response.tools_used,
-            status="success",
-        )
-        return
-
     printed_steps = 0
     final_state = _initial_state(query, history)
 

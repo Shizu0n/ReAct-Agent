@@ -49,8 +49,11 @@ Tool choice:
 - Use calculator for simple arithmetic.
 - Use python_executor for multi-step calculations, code execution, statistics,
   arrays, JSON/text processing, or symbolic algebra.
-- Do not use python_executor when the user asks for code they can run locally;
-  provide the code as the final answer.
+- When the user asks you to generate, compute, list, or produce a result using
+  Python (for example "generate the first 10 Fibonacci numbers using Python"),
+  run python_executor and report the actual output, not just the source code.
+- Only skip python_executor when the user explicitly says they will run the code
+  locally or on their own machine; then provide the code as the final answer.
 - Use web_search for current, external, cited, or explicitly searched facts.
 - Use one tool call at a time. After each observation, decide whether another
   tool call is needed or whether you can answer.
@@ -88,4 +91,17 @@ Action Input: x, y = symbols('x y'); print(solve((Eq(4*x + 5*y + 6, 0), Eq(3*x +
 [Observation: {x: -4/11, y: -10/11}]
 Thought: sympy returned both variables.
 Final Answer: x = -4/11, y = -10/11
+
+User: generate the first 10 Fibonacci numbers using Python
+Thought: This asks for a concrete result, so I run the code and report the output rather than only drafting it.
+Action: python_executor
+Action Input: a, b = 0, 1
+values = []
+for i in range(10):
+    values.append(a)
+    a, b = b, a + b
+print(values)
+[Observation: [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]]
+Thought: The executor returned the sequence.
+Final Answer: The first 10 Fibonacci numbers are [0, 1, 1, 2, 3, 5, 8, 13, 21, 34].
 """

@@ -247,30 +247,6 @@ class ApiTests(unittest.TestCase):
         self.assertIsInstance(messages[2], HumanMessage)
         self.assertEqual(messages[2].content, "explain more the steps")
 
-    def test_contextual_math_followup_bypasses_llm_graph(self):
-        self.api.build_graph = lambda: self.fail(
-            "contextual math follow-up should not call the LLM graph"
-        )
-
-        response = self.client.post(
-            "/run",
-            json={
-                "query": "explain more the steps",
-                "history": [
-                    {
-                        "role": "user",
-                        "content": "Calculate √1764 and explain the steps",
-                    },
-                    {"role": "assistant", "content": "√1764 = 42."},
-                ],
-            },
-        )
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertIn("42 × 42 = 1764", body["result"])
-        self.assertEqual(body["tools_used"], ["calculator"])
-
     def test_agent_invoke_matches_public_portfolio_endpoint_contract(self):
         response = self.client.post(
             "/agent/invoke", json={"query": "use the fake graph"}
@@ -287,25 +263,6 @@ class ApiTests(unittest.TestCase):
         self.assertIsInstance(body["latency_ms"], int)
         self.assertIsInstance(body["total_time"], float)
         self.assertTrue(body["run_id"])
-
-    def test_simple_math_shortcut_bypasses_llm_graph(self):
-        self.api.build_graph = lambda: self.fail(
-            "simple math should not call the LLM graph"
-        )
-
-        response = self.client.post("/run", json={"query": "What is 40 + 2?"})
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["result"], "42")
-        self.assertEqual(body["tools_used"], ["calculator"])
-        self.assertGreaterEqual(len(body["steps"]), 2)
-        self.assertEqual(body["steps"][0]["action"], "calculator")
-        self.assertEqual(
-            body["steps"][0]["thought"], "Use deterministic calculator; no LLM needed."
-        )
-        self.assertEqual(body["steps"][0]["observation"], "42")
-        self.assertEqual(body["steps"][-1]["type"], "final")
 
     def test_stream_run_emits_step_and_final_events(self):
         with self.client.stream(
