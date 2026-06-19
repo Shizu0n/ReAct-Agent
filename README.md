@@ -17,14 +17,14 @@ react-agent/
 ├── backend/              FastAPI app, LangGraph ReAct agent, tools, tests
 │   ├── agent/
 │   │   ├── graph.py      StateGraph: agent_node, tool_node, should_continue
-│   │   ├── llms.py       FreeModelFallback chain (Gemini → Groq → GitHub → OpenRouter → CF)
+│   │   ├── llms.py       FreeModelFallback chain (Gemini → Groq → GitHub), usage tracking
 │   │   ├── tools.py      web_search, python_executor, calculator
-│   │   ├── shortcuts.py  Deterministic fast path (arithmetic, compound growth, statistics)
-│   │   ├── prompts.py    SYSTEM_PROMPT with ReAct format and few-shot examples
+│   │   ├── prompts.py    SYSTEM_PROMPT for native tool calling
 │   │   ├── redaction.py  Secret redaction for logs and error messages
 │   │   └── state.py      AgentState TypedDict, MaxIterationsError
 │   ├── api.py            FastAPI routes, SSE streaming, CORS, rate limiting, trace store
 │   ├── main.py           Standalone uvicorn entrypoint
+│   ├── evals/            Agent evaluation harness (task success + tool selection)
 │   └── tests/            Unit tests (agent, API, LLMs, redaction)
 ├── frontend/             React 19, TypeScript, Vite, TailwindCSS
 │   └── src/
@@ -48,11 +48,9 @@ react-agent/
 
 ### Backend flow
 
-Before building the graph, the API tries a local fast path for simple deterministic tasks: arithmetic, compound growth, square roots, and basic statistics with an explicit list. When it matches, the response preserves `trace/steps` but never calls an LLM provider.
+`agent_node` calls the LLM with the `SYSTEM_PROMPT` (which includes the current date and current-fact rules) and the tool schemas, using native function calling. If the model returns tool calls, the graph routes to the tool node; otherwise the content is the final answer. When the query requires current facts, it forces `web_search` before answering, even if the model tries to answer directly. A cap of 2 searches per run prevents search loops.
 
-`agent_node` calls the LLM with the `SYSTEM_PROMPT` (which includes the current date and current-fact rules), parses the response in ReAct format, and records `Thought`, `Action`, `Action Input`, or `Final Answer`. When the query requires current facts, it forces `web_search` before answering, even if the model tries to answer directly. A cap of 2 searches per run prevents search loops.
-
-`tool_node` executes the chosen tool, creates a `Step` with `thought`, `action`, `action_input`, `observation`, and `timestamp`, then increments `iteration_count`.
+`tool_node` executes each tool call, appends a `ToolMessage` for the model, and creates a `Step` with `thought` (the model's text alongside the call), `action`, `action_input`, `observation`, and `timestamp`, then increments `iteration_count`.
 
 `should_continue` is the graph router: it routes to `tool_node` when an `Action` exists, ends when a `Final Answer` exists, and raises `MaxIterationsError` at 10 iterations. Without this, a bad agent becomes a while loop with self-esteem.
 
@@ -75,9 +73,8 @@ flowchart TB
 
     subgraph Backend["Backend (FastAPI)"]
         API["POST /agent/invoke"]
-        SC["Shortcut Engine"]
         subgraph LangGraph["LangGraph StateGraph"]
-            AN["Agent Node<br/>(LLM Reasoning)"]
+            AN["Agent Node<br/>(LLM + native tools)"]
             TN["Tool Node<br/>(Execute)"]
             Router{"should_continue"}
         end
@@ -94,28 +91,22 @@ flowchart TB
         G["Gemini"]
         GR["Groq"]
         GH["GitHub Models"]
-        OR["OpenRouter"]
-        CF["Cloudflare Workers AI"]
     end
 
     UI -->|"query + history"| Hook
     Hook -->|"POST SSE"| API
-    API -->|"try fast path"| SC
-    SC -->|"hit"| Store
-    SC -->|"miss"| AN
-    AN -->|"Thought + Action"| Router
-    Router -->|"has Action"| TN
-    Router -->|"has Final Answer"| Store
+    API -->|"initial state"| AN
+    AN -->|"tool calls or final"| Router
+    Router -->|"has tool calls"| TN
+    Router -->|"final answer"| Store
     Router -->|"≥ 10 iterations"| Store
-    TN -->|"Observation"| AN
+    TN -->|"tool results"| AN
     TN --> WS
     TN --> PE
     TN --> CA
-    AN -->|"invoke"| G
+    AN -->|"invoke + tools"| G
     G -.->|"fallback"| GR
     GR -.->|"fallback"| GH
-    GH -.->|"fallback"| OR
-    OR -.->|"fallback"| CF
     Store -->|"SSE events"| Hook
     Hook -->|"steps"| Trace
     Hook -->|"messages"| UI
@@ -142,10 +133,8 @@ The agent does not use OpenAI or Anthropic. The default chain uses only provider
 1. `GEMINI_API_KEY` with `GEMINI_MODEL`, default `gemini-2.5-flash`
 2. `GROQ_API_KEY` with `GROQ_MODEL`, default `llama-3.3-70b-versatile`
 3. `GITHUB_MODELS_TOKEN` + `GITHUB_MODELS_MODEL`
-4. `OPENROUTER_API_KEY` with `OPENROUTER_MODEL`, default `meta-llama/llama-3.1-8b-instruct:free`
-5. `CF_ACCOUNT_ID` + `CF_WORKERS_AI_TOKEN` with `CF_WORKERS_AI_MODEL`, default `@cf/meta/llama-3-8b-instruct`
 
-`FreeModelFallback` tries each provider in order. If one fails, it skips to the next. If all fail, it raises `RuntimeError` with concatenated errors (secrets redacted). The `/config` endpoint returns the active model and fallbacks; the frontend displays this in the chat status bar.
+All three are reached through one OpenAI-compatible tool-calling path (Gemini via its OpenAI-compat endpoint), so the agent uses native function calling, not text parsing. `FreeModelFallback` tries each provider in order. If one fails, it skips to the next. If all fail, it raises `RuntimeError` with concatenated errors (secrets redacted). The `/config` endpoint returns the active model and fallbacks; the frontend displays this in the chat status bar.
 
 These providers may have their own quotas, terms, and limits. For absolute zero cost, run a local model and adapt `agent/llms.py`; a free cloud API is still a cloud API, not a contractual miracle.
 
@@ -248,7 +237,7 @@ This project wraps a ReAct loop in LangGraph, exposes it through FastAPI with bo
 
 **Frontend:** The split-pane layout (chat + reasoning trace) eliminates the "black box" problem. The timeline is not an afterthought panel — it is the core differentiation. Framer Motion animations, step badges, telemetry counters, and resizable panels make the reasoning visible and inspectable without requiring the user to open DevTools.
 
-**Shortcuts:** Deterministic fast paths for arithmetic, compound growth, square roots, and basic statistics mean the agent does not waste an LLM call on `2 + 2`. The trace still shows the step, so the UI stays consistent.
+**Observability:** Every run reports token usage, estimated cost, latency, and the provider that served each call, surfaced on the API response and in the reasoning-trace header. An evaluation harness (`backend/evals/`) scores task success and tool-selection accuracy against a labelled dataset.
 
 **Security:** `python_executor` runs in a subprocess with AST validation, import whitelist, blocked builtins, and a 10s timeout. `redaction.py` scrubs secrets from all log output and error messages. Rate limiting via slowapi caps at 10 req/min/IP.
 
@@ -259,7 +248,7 @@ This project wraps a ReAct loop in LangGraph, exposes it through FastAPI with bo
 | Max ReAct iterations | `10` |
 | Stored traces | Last `100` runs |
 | Rate limit | `10 req/min/IP` |
-| Local shortcuts | Arithmetic, compound growth, square roots, basic statistics |
+| Tool calling | Native function calling (OpenAI-compatible) |
 | Web search context | `2` results, `360` chars per snippet by default |
 | Web search cap per run | `2` (prevents search loops) |
 | Tools available | `3` (`web_search`, `python_executor`, `calculator`) |
@@ -267,7 +256,7 @@ This project wraps a ReAct loop in LangGraph, exposes it through FastAPI with bo
 | Chat history sent | Last `8` messages |
 | Session persistence | localStorage (messages + steps + runSummary) |
 | Frontend tabs | Chat, About (portfolio) |
-| Test coverage | Unit tests for tools, graph flow, shortcuts, health, run, stream, trace, LLMs, redaction |
+| Test coverage | Unit tests for tools, graph flow, health, run, stream, trace, LLMs, redaction; agent eval harness |
 
 ## Key Decisions
 
@@ -277,9 +266,7 @@ This project wraps a ReAct loop in LangGraph, exposes it through FastAPI with bo
 
 **Why subprocess for python_executor:** `exec()` in-process is a sandbox escape waiting to happen. A subprocess with AST validation, import whitelisting, and a 10s timeout is defense in depth. The subprocess pre-loads sympy and numpy (when available) so the agent does not waste a step importing them.
 
-**Why FreeModelFallback:** Portfolio projects should not cost money to run. The fallback chain means if Gemini's free tier rate-limits, Groq picks up. If Groq is down, OpenRouter gets a shot. The user never sees a failed run unless every provider is genuinely unreachable.
-
-**Why shortcuts exist:** Calling an LLM to compute `12 * 8 + 5` is wasteful. The shortcut engine handles arithmetic, compound growth, square roots, and basic statistics deterministically. The trace still shows the step with tool attribution, so the frontend does not need a separate code path.
+**Why FreeModelFallback:** Portfolio projects should not cost money to run. The fallback chain means if Gemini's free tier rate-limits, Groq picks up. If Groq is down, GitHub Models gets a shot. The user never sees a failed run unless every provider is genuinely unreachable.
 
 **How MaxIterationsError works:** `should_continue` checks `iteration_count` before routing back into tools. At `10`, it raises `MaxIterationsError` instead of letting the loop continue. This makes runaway reasoning fail loudly instead of charging rent in your process.
 
@@ -295,9 +282,6 @@ GEMINI_API_KEY=
 GROQ_API_KEY=
 GITHUB_MODELS_TOKEN=
 GITHUB_MODELS_MODEL=
-OPENROUTER_API_KEY=
-CF_ACCOUNT_ID=
-CF_WORKERS_AI_TOKEN=
 
 # Web search (optional but recommended)
 TAVILY_API_KEY=

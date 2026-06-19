@@ -2,9 +2,9 @@ import type { ReactNode } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Activity, Check, Clock, Route, Search, Terminal, Timer, Wrench, X } from 'lucide-react'
+import { Activity, Check, Clock, Coins, Hash, Route, Search, Terminal, Timer, Wrench, X } from 'lucide-react'
 import clsx from 'clsx'
-import type { AgentState, Step, StepType } from '../../types'
+import type { AgentState, Step, StepType, Usage } from '../../types'
 
 type ReasoningPanelProps = {
   state: AgentState
@@ -126,6 +126,7 @@ function PanelChrome({
         latest={latestStep ? stepLabel(stepType(latestStep)) : 'idle'}
         steps={state.steps.length}
         tools={toolsUsed}
+        usage={summary?.usage}
       />
       <TraceProgress current={state.steps.length} total={Math.max(state.steps.length, state.isLoading ? state.steps.length + 1 : state.steps.length)} />
 
@@ -264,18 +265,36 @@ function TelemetryStrip({
   latest,
   steps,
   tools,
+  usage,
 }: {
   elapsed?: number
   isLoading: boolean
   latest: string
   steps: number
   tools: string[]
+  usage?: Usage
 }) {
+  const hasUsage = Boolean(usage && usage.total_tokens > 0)
+
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-[var(--border-subtle)] px-4 py-3">
       <TelemetryItem icon={<Activity className="h-3.5 w-3.5" />} label="steps" value={String(steps)} />
       <TelemetryItem icon={<Wrench className="h-3.5 w-3.5" />} label="tools" value={tools.length ? tools.join(', ') : 'none'} />
       <TelemetryItem icon={<Clock className="h-3.5 w-3.5" />} label="time" value={elapsed ? `${elapsed}ms` : isLoading ? 'streaming' : 'idle'} />
+      {hasUsage ? (
+        <TelemetryItem
+          icon={<Hash className="h-3.5 w-3.5" />}
+          label="tokens"
+          value={`${usage!.total_tokens.toLocaleString()} (${usage!.llm_calls} calls)`}
+        />
+      ) : null}
+      {hasUsage ? (
+        <TelemetryItem
+          icon={<Coins className="h-3.5 w-3.5" />}
+          label="est. cost"
+          value={`$${usage!.estimated_cost_usd.toFixed(4)}`}
+        />
+      ) : null}
       <TelemetryItem label="latest" value={latest} />
     </div>
   )

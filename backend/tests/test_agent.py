@@ -5,12 +5,20 @@ from unittest.mock import patch
 from langchain_core.messages import AIMessage, HumanMessage
 
 
+def make_tool_call(name, call_id="call-1", **args):
+    """Build an assistant AIMessage carrying a single native tool call."""
+    return AIMessage(
+        content="", tool_calls=[{"name": name, "args": args, "id": call_id}]
+    )
+
+
 class ScriptedLLM:
     def __init__(self, responses):
         self._responses = iter(responses)
 
-    def invoke(self, messages):
-        return AIMessage(content=next(self._responses))
+    def invoke(self, messages, tools=None):
+        response = next(self._responses)
+        return response if isinstance(response, AIMessage) else AIMessage(content=response)
 
 
 class CapturingLLM(ScriptedLLM):
@@ -18,9 +26,9 @@ class CapturingLLM(ScriptedLLM):
         super().__init__(responses)
         self.messages = []
 
-    def invoke(self, messages):
+    def invoke(self, messages, tools=None):
         self.messages.append(messages)
-        return super().invoke(messages)
+        return super().invoke(messages, tools)
 
 
 class ToolTests(unittest.TestCase):
@@ -206,13 +214,21 @@ class GraphTests(unittest.TestCase):
                 _requires_web_search("what is the latest version of python")
             )
 
+    def test_web_search_gate_ignores_year_numbers_in_math(self):
+        from agent.graph import _requires_web_search
+
+        # A bare year inside a math operand must not force a web search.
+        self.assertFalse(_requires_web_search("What is the square root of 2025?"))
+        # Temporal phrasing about a year still does.
+        self.assertTrue(_requires_web_search("What major AI releases happened in 2026?"))
+
     def test_graph_runs_tool_then_returns_final_answer(self):
         from agent.graph import build_graph
 
         llm = ScriptedLLM(
             [
-                "Thought: Need arithmetic.\nAction: calculator\nAction Input: 40 + 2",
-                "Thought: I have the answer.\nFinal Answer: 42",
+                make_tool_call("calculator", expression="40 + 2"),
+                "42",
             ]
         )
         graph = build_graph(llm=llm)
@@ -234,16 +250,17 @@ class GraphTests(unittest.TestCase):
     def test_graph_normalizes_fenced_python_executor_input_in_trace(self):
         from agent.graph import build_graph
 
+        fenced = (
+            "```python\n"
+            "from sympy import symbols, Eq, solve\n"
+            "x, y = symbols('x y')\n"
+            "print(solve((Eq(4*x + 5*y + 6, 0), Eq(3*x + y + 2, 0)), (x, y)))\n"
+            "```"
+        )
         llm = ScriptedLLM(
             [
-                "Thought: Need sympy.\n"
-                "Action: python_executor\n"
-                "Action Input: ```python\n"
-                "from sympy import symbols, Eq, solve\n"
-                "x, y = symbols('x y')\n"
-                "print(solve((Eq(4*x + 5*y + 6, 0), Eq(3*x + y + 2, 0)), (x, y)))\n"
-                "```",
-                "Thought: I have the answer.\nFinal Answer: x = -4/11, y = -10/11",
+                make_tool_call("python_executor", code=fenced),
+                "x = -4/11, y = -10/11",
             ]
         )
         graph = build_graph(llm=llm)
@@ -267,18 +284,19 @@ class GraphTests(unittest.TestCase):
     def test_graph_normalizes_fenced_numpy_executor_input_in_trace(self):
         from agent.graph import build_graph
 
+        fenced = (
+            "```\n"
+            "import numpy as np\n"
+            "A = np.array([[4, 5], [3, 1]])\n"
+            "b = np.array([-6, -2])\n"
+            "x, y = np.linalg.solve(A, b)\n"
+            'print(f"x = {round(float(x), 6)}, y = {round(float(y), 6)}")\n'
+            "```"
+        )
         llm = ScriptedLLM(
             [
-                "Thought: Need numeric solve.\n"
-                "Action: python_executor\n"
-                "Action Input: ```\n"
-                "import numpy as np\n"
-                "A = np.array([[4, 5], [3, 1]])\n"
-                "b = np.array([-6, -2])\n"
-                "x, y = np.linalg.solve(A, b)\n"
-                'print(f"x = {round(float(x), 6)}, y = {round(float(y), 6)}")\n'
-                "```",
-                "Thought: I have the answer.\nFinal Answer: x = -4/11, y = -10/11",
+                make_tool_call("python_executor", code=fenced),
+                "x = -4/11, y = -10/11",
             ]
         )
         graph = build_graph(llm=llm)
@@ -302,17 +320,18 @@ class GraphTests(unittest.TestCase):
     def test_graph_normalizes_flattened_fenced_python_executor_input_in_trace(self):
         from agent.graph import build_graph
 
+        flattened = (
+            "``` from sympy import symbols, Eq, solve "
+            "# Declare the symbols x, y = symbols('x y') "
+            "# Define the equations eq1 = Eq(4*x + 5*y, -6) "
+            "eq2 = Eq(3*x + y, -2) "
+            "# Solve the system of equations solution = solve((eq1, eq2), (x, y)) "
+            "print(solution) ```"
+        )
         llm = ScriptedLLM(
             [
-                "Thought: Need sympy.\n"
-                "Action: python_executor\n"
-                "Action Input: ``` from sympy import symbols, Eq, solve "
-                "# Declare the symbols x, y = symbols('x y') "
-                "# Define the equations eq1 = Eq(4*x + 5*y, -6) "
-                "eq2 = Eq(3*x + y, -2) "
-                "# Solve the system of equations solution = solve((eq1, eq2), (x, y)) "
-                "print(solution) ```",
-                "Thought: I have the answer.\nFinal Answer: x = -4/11, y = -10/11",
+                make_tool_call("python_executor", code=flattened),
+                "x = -4/11, y = -10/11",
             ]
         )
         graph = build_graph(llm=llm)
@@ -336,7 +355,7 @@ class GraphTests(unittest.TestCase):
     def test_graph_system_prompt_includes_current_date_context(self):
         from agent.graph import build_graph
 
-        llm = CapturingLLM(["Thought: Done.\nFinal Answer: ok"])
+        llm = CapturingLLM(["ok"])
         graph = build_graph(llm=llm)
 
         graph.invoke(
@@ -352,10 +371,11 @@ class GraphTests(unittest.TestCase):
         self.assertIn("Current date:", system_prompt)
         self.assertIn("Dates before the current date are past dates", system_prompt)
         self.assertIn("do not repeat web_search", system_prompt)
-        self.assertIn("conversational ReAct chatbot", system_prompt)
-        self.assertIn("Tool contracts:", system_prompt)
-        self.assertIn("run locally", system_prompt)
-        self.assertNotIn("latest stable Python version 2024", system_prompt)
+        self.assertIn("conversational ReAct agent", system_prompt)
+        self.assertIn("native tool calling", system_prompt)
+        self.assertIn("run the code locally", system_prompt)
+        # The text ReAct protocol is gone; tools are passed via the API now.
+        self.assertNotIn("Thought:", system_prompt)
 
     def test_graph_forces_web_search_for_latest_version_final_answer_skip(self):
         from agent.graph import TOOLS, build_graph
@@ -369,12 +389,7 @@ class GraphTests(unittest.TestCase):
                 return "Python 3.13.7 is the latest stable Python release."
 
         fake_web_search = FakeWebSearch()
-        llm = ScriptedLLM(
-            [
-                "Thought: I know this from memory.\nFinal Answer: Python 3.12.3",
-                "Thought: The search result says Python 3.13.7.\nFinal Answer: Python 3.13.7",
-            ]
-        )
+        llm = ScriptedLLM(["Python 3.12.3", "Python 3.13.7"])
         graph = build_graph(llm=llm)
 
         with patch.dict(os.environ, {"REACT_AGENT_DISABLE_WEB_SEARCH_GATE": ""}):
@@ -415,11 +430,8 @@ class GraphTests(unittest.TestCase):
 
         llm = ScriptedLLM(
             [
-                "Thought: Need current data.\n"
-                "Action: web_search\n"
-                "Action Input: latest stable Python version",
-                "Thought: I checked the result.\n"
-                "Final Answer: The latest stable Python version is Python 3.14.4.",
+                make_tool_call("web_search", query="latest stable Python version"),
+                "The latest stable Python version is Python 3.14.4.",
             ]
         )
         graph = build_graph(llm=llm)
@@ -458,8 +470,8 @@ class GraphTests(unittest.TestCase):
         fake_web_search = FakeWebSearch()
         llm = ScriptedLLM(
             [
-                "Thought: I know this from memory.\nFinal Answer: LangGraph is a graph framework.",
-                "Thought: I checked the web result.\nFinal Answer: LangGraph source-backed summary.",
+                "LangGraph is a graph framework.",
+                "LangGraph source-backed summary.",
             ]
         )
         graph = build_graph(llm=llm)
@@ -500,8 +512,8 @@ class GraphTests(unittest.TestCase):
         fake_web_search = FakeWebSearch()
         llm = ScriptedLLM(
             [
-                "Thought: I can answer from memory.\nFinal Answer: I did not use external sources.",
-                "Thought: I checked the source result.\nFinal Answer: Sources listed.",
+                "I did not use external sources.",
+                "Sources listed.",
             ]
         )
         graph = build_graph(llm=llm)
@@ -549,9 +561,9 @@ class GraphTests(unittest.TestCase):
         fake_web_search = FakeWebSearch()
         llm = ScriptedLLM(
             [
-                "Thought: Need current data.\nAction: web_search\nAction Input: latest Python version",
-                "Thought: These dates seem future.\nAction: web_search\nAction Input: latest stable Python release",
-                "Thought: Still confused by dates.\nAction: web_search\nAction Input: currently available Python download",
+                make_tool_call("web_search", call_id="ws1", query="latest Python version"),
+                make_tool_call("web_search", call_id="ws2", query="latest stable Python release"),
+                make_tool_call("web_search", call_id="ws3", query="current Python download"),
             ]
         )
         graph = build_graph(llm=llm)
@@ -577,7 +589,7 @@ class GraphTests(unittest.TestCase):
         )
         self.assertIn("Download Python 3.14.4", final_state["final_answer"])
         self.assertIn(
-            "repeating web_search would risk a loop",
+            "Based on the latest web_search results",
             final_state["messages"][-1].content,
         )
 

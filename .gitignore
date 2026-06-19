@@ -34,3 +34,5 @@ DESIGN.md
 DESIGN.json
 .vscode
 .gstack/
+backend/evals/results.json
+backend/evals/results.md

@@ -99,6 +99,7 @@ function persistedRunSummary(value: unknown): RunSummary | null {
       value.status === 'running' || value.status === 'success' || value.status === 'error'
         ? value.status
         : undefined,
+    usage: isRecord(value.usage) ? (value.usage as unknown as RunSummary['usage']) : undefined,
   }
 }
 
@@ -160,6 +161,7 @@ function streamEventToStep(payload: StreamEvent): Step {
     elapsed_ms: payload.elapsed_ms,
     tools_used: payload.tools_used,
     status: payload.status,
+    usage: payload.usage,
     timestamp: payload.timestamp ?? timestamp(),
   }
 }
@@ -441,6 +443,7 @@ export function useAgent() {
         elapsed_ms: step.elapsed_ms,
         tools_used: step.tools_used ?? [],
         status: step.status ?? 'success',
+        usage: step.usage,
       },
     }))
     return true
@@ -459,6 +462,7 @@ export function useAgent() {
         elapsed_ms: response.latency_ms,
         tools_used: response.tools_used,
         status: response.status,
+        usage: response.usage,
       },
     }))
     updateAssistantMessage(assistantId, response.answer || response.result)

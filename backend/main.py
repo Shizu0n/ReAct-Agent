@@ -6,34 +6,40 @@ from agent.graph import build_graph
 
 
 class ScriptedLLM:
-    def __init__(self, responses: list[str]):
+    def __init__(self, responses: list):
         self._responses = iter(responses)
 
-    def invoke(self, messages):
-        return AIMessage(content=next(self._responses))
+    def invoke(self, messages, tools=None):
+        response = next(self._responses)
+        return response if isinstance(response, AIMessage) else AIMessage(content=response)
+
+
+def _tool_call(name: str, **args) -> AIMessage:
+    return AIMessage(
+        content="", tool_calls=[{"name": name, "args": args, "id": f"{name}-call"}]
+    )
 
 
 EXAMPLES = [
     (
         "Give a direct answer: what is ReAct in one sentence?",
         [
-            "Thought: This can be answered directly.\n"
-            "Final Answer: ReAct combines reasoning traces with tool actions so an agent can think, act, observe, and answer."
+            "ReAct combines reasoning traces with tool actions so an agent can think, act, observe, and answer."
         ],
     ),
     (
         "Calculate 12 * 8 + 5.",
         [
-            "Thought: Need exact arithmetic.\nAction: calculator\nAction Input: 12 * 8 + 5",
-            "Thought: The calculator returned the value.\nFinal Answer: 101",
+            _tool_call("calculator", expression="12 * 8 + 5"),
+            "101",
         ],
     ),
     (
         "Use Python to compute 6!, then divide it by 9.",
         [
-            "Thought: Need factorial first.\nAction: python_executor\nAction Input: print(math.factorial(6))",
-            "Thought: Need divide the observed factorial by 9.\nAction: calculator\nAction Input: 720 / 9",
-            "Thought: The final computed value is available.\nFinal Answer: 80.0",
+            _tool_call("python_executor", code="print(math.factorial(6))"),
+            _tool_call("calculator", expression="720 / 9"),
+            "80.0",
         ],
     ),
 ]

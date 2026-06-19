@@ -44,8 +44,9 @@ class ScriptedLLM:
     def __init__(self, responses):
         self._responses = iter(responses)
 
-    def invoke(self, messages):
-        return AIMessage(content=next(self._responses))
+    def invoke(self, messages, tools=None):
+        response = next(self._responses)
+        return response if isinstance(response, AIMessage) else AIMessage(content=response)
 
 
 class FakeWebSearch:
@@ -86,8 +87,8 @@ class FakeGraphWithSpy(FakeGraph):
 
         llm = ScriptedLLM(
             [
-                "Thought: I know this from memory.\nFinal Answer: Python 3.13 is currently in beta",
-                "Thought: I checked the web result.\nFinal Answer: Search-backed current answer.",
+                "Python 3.13 is currently in beta",
+                "Search-backed current answer.",
             ]
         )
         graph = build_graph(llm=llm)
@@ -101,7 +102,7 @@ class ApiTests(unittest.TestCase):
 
         self.api = api
         self.original_build_graph = api.build_graph
-        api.build_graph = lambda: FakeGraphWithSpy()
+        api.build_graph = lambda *a, **k: FakeGraphWithSpy()
         api.RUNS.clear()
         api.RUN_ORDER.clear()
         self.client = TestClient(api.app)
@@ -217,7 +218,7 @@ class ApiTests(unittest.TestCase):
                 captured["messages"] = initial_state["messages"]
                 return super().invoke(initial_state)
 
-        self.api.build_graph = lambda: CapturingGraph()
+        self.api.build_graph = lambda *a, **k: CapturingGraph()
 
         response = self.client.post(
             "/run",
@@ -280,7 +281,7 @@ class ApiTests(unittest.TestCase):
         self.assertIn('"content": "42"', text)
 
     def test_stream_run_reports_graph_startup_errors_as_final_event(self):
-        def raise_startup_error():
+        def raise_startup_error(*args, **kwargs):
             raise RuntimeError("No free model provider configured.")
 
         self.api.build_graph = raise_startup_error

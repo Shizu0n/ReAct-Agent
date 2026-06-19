@@ -1,5 +1,14 @@
 export type StepType = 'thought' | 'action' | 'observation' | 'final'
 
+export interface Usage {
+  llm_calls: number
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  estimated_cost_usd: number
+  providers: string[]
+}
+
 export interface Step {
   type?: StepType
   content?: string
@@ -13,6 +22,7 @@ export interface Step {
   elapsed_ms?: number
   tools_used?: string[]
   status?: 'running' | 'success' | 'error'
+  usage?: Usage
   timestamp: string
 }
 
@@ -27,6 +37,7 @@ export type StreamEvent = {
   elapsed_ms?: number
   tools_used?: string[]
   status?: 'running' | 'success' | 'error'
+  usage?: Usage
 }
 
 export interface AgentResponse {
@@ -39,6 +50,7 @@ export interface AgentResponse {
   tools_used: string[]
   latency_ms: number
   status: 'success' | 'error'
+  usage?: Usage
 }
 
 export interface Message {
@@ -52,6 +64,7 @@ export interface RunSummary {
   elapsed_ms?: number
   tools_used: string[]
   status?: 'running' | 'success' | 'error'
+  usage?: Usage
 }
 
 export interface AgentState {

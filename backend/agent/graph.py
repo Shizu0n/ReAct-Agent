@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, cast
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
 
 from agent.llms import (
     FreeModelFallback,
+    UsageTracker,
+    UsageTrackingLLM,
     configured_free_providers,
     load_model_environment,
 )
@@ -37,13 +38,92 @@ TOOL_INPUT_KEYS = {
     PYTHON_EXECUTOR_TOOL_NAME: "code",
     CALCULATOR_TOOL_NAME: "expression",
 }
+
+# OpenAI-style tool schemas. The descriptions are deliberately directive: tool
+# selection is driven by these strings, so they tell the model to call the tool
+# rather than reason the answer out itself.
+TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": CALCULATOR_TOOL_NAME,
+            "description": (
+                "Evaluate an arithmetic or numeric math expression and return the "
+                "exact result. Use this for ANY arithmetic the user asks about "
+                "(addition, subtraction, multiplication, division, powers, roots, "
+                "percentages) instead of computing it yourself. Supports Python "
+                "operators and the math module, e.g. '17 * 23 + math.sqrt(1764)'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expression": {
+                        "type": "string",
+                        "description": "The math expression to evaluate.",
+                    }
+                },
+                "required": ["expression"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": PYTHON_EXECUTOR_TOOL_NAME,
+            "description": (
+                "Run a snippet of Python and return its stdout. Use for multi-step "
+                "computation, sequences, statistics, list/data processing, or "
+                "symbolic algebra with sympy. The code must be runnable Python with "
+                "no Markdown fences; print the value you need. Do not use names that "
+                "start with an underscore."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Runnable Python source that prints its result.",
+                    }
+                },
+                "required": ["code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": WEB_SEARCH_TOOL_NAME,
+            "description": (
+                "Search the web for current, external, or citable facts: latest "
+                "versions, release dates, prices, news, or public documentation. "
+                "Returns titled results with URLs. Use this instead of answering "
+                "current-fact questions from memory."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query.",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+]
+
 CURRENT_FACT_PATTERNS = (
     r"\blatest version\b",
     r"\bcurrent version\b",
     r"\bnewest release\b",
     r"\bwhat\s+is\s+the\s+(?:current|latest|newest)\b",
     r"\bis\s+.+\s+(?:still|now|currently)\b",
-    r"\b(?:price|stock|news|today|this year|2024|2025|2026)\b",
+    r"\b(?:price|stock|news|today|this year)\b",
+    # Year mentions only count as a current-fact signal in temporal phrasing
+    # ("in 2025", "during 2026"), not as bare numbers inside a math expression
+    # such as "square root of 2025".
+    r"\b(?:in|during|since|throughout)\s+202[4-9]\b",
 )
 EXTERNAL_LOOKUP_PATTERNS = (
     r"\bsearch(?:\s+the\s+web)?\b",
@@ -60,48 +140,6 @@ SOURCE_FOLLOWUP_PATTERNS = (
 WEB_SEARCH_GATE_DISABLE_ENV = "REACT_AGENT_DISABLE_WEB_SEARCH_GATE"
 MAX_CURRENT_FACT_WEB_SEARCHES = 2
 URL_PATTERN = re.compile(r"https?://[^\s)>\]]+")
-
-
-@dataclass
-class ParsedResponse:
-    thought: str
-    action: str | None = None
-    action_input: str | None = None
-    final_answer: str | None = None
-
-
-def _extract_field(label: str, content: str) -> str | None:
-    pattern = (
-        rf"(?:^|\n){re.escape(label)}\s*:\s*"
-        rf"(.*?)(?=\n(?:Thought|Action|Action Input|Observation|Final Answer)\s*:|\Z)"
-    )
-    match = re.search(pattern, content, flags=re.IGNORECASE | re.DOTALL)
-    return match.group(1).strip() if match else None
-
-
-def parse_react_response(content: str) -> ParsedResponse:
-    thought = _extract_field("Thought", content) or ""
-    final_answer = _extract_field("Final Answer", content)
-    if final_answer is not None:
-        return ParsedResponse(thought=thought, final_answer=final_answer)
-
-    action = _extract_field("Action", content)
-    action_input = _extract_field("Action Input", content)
-    if action and action_input is not None:
-        return ParsedResponse(
-            thought=thought,
-            action=action.strip(),
-            action_input=action_input,
-        )
-
-    return ParsedResponse(thought=thought, final_answer=content.strip())
-
-
-def _last_ai_message(messages: list[BaseMessage]) -> AIMessage | None:
-    for message in reversed(messages):
-        if isinstance(message, AIMessage):
-            return message
-    return None
 
 
 def _last_user_message(messages: list[BaseMessage]) -> str:
@@ -161,13 +199,12 @@ def _runtime_system_prompt() -> str:
         "Runtime context:\n"
         f"- Current date: {current_date}.\n"
         "- Dates before the current date are past dates, not future dates.\n"
-        "- For current-fact questions, answer from web_search observations after "
-        "you have relevant results; do not repeat web_search just because your "
-        "training knowledge feels inconsistent.\n"
-        "- If the user explicitly asks to search, cite sources, list sources, "
-        "verify with public documentation, or provide references, use web_search "
-        "before answering. If it is a follow-up, search for sources about the "
-        "previous substantive user request."
+        "- For current-fact questions, answer from web_search results once you "
+        "have them; do not repeat web_search just because your training knowledge "
+        "feels inconsistent.\n"
+        "- If the user explicitly asks to search, cite sources, list sources, or "
+        "verify with public documentation, call web_search before answering. If it "
+        "is a follow-up, search for sources about the previous substantive request."
     )
 
 
@@ -201,24 +238,39 @@ def _with_source_urls_if_needed(answer: str, steps: list[Step]) -> str:
     return f"{answer.rstrip()}\n\nSources:\n{source_lines}"
 
 
-def _forced_final_from_search_observation(observation: str) -> str:
-    return (
-        "Thought: I already searched the web and have current results; repeating "
-        "web_search would risk a loop.\n"
-        "Final Answer: Based on the latest web_search observation, the current "
-        f"answer is:\n{observation}"
+def _tool_call_action_input(call: dict[str, Any]) -> str:
+    """Reduce a tool call's structured args to the single display string the
+    trace and UI expect (the expression / code / query)."""
+    args = call.get("args", {}) or {}
+    key = TOOL_INPUT_KEYS.get(call.get("name", ""))
+    if key and key in args:
+        return str(args[key])
+    if len(args) == 1:
+        return str(next(iter(args.values())))
+    return str(args)
+
+
+def _last_ai_message(messages: list[BaseMessage]) -> AIMessage | None:
+    for message in reversed(messages):
+        if isinstance(message, AIMessage):
+            return message
+    return None
+
+
+def _forced_web_search_message(query: str, messages: list[BaseMessage]) -> AIMessage:
+    return AIMessage(
+        content=(
+            "I should verify this with a web search before answering, since my "
+            "training data may be outdated or the user asked for sources."
+        ),
+        tool_calls=[
+            {
+                "name": WEB_SEARCH_TOOL_NAME,
+                "args": {"query": _web_search_action_input(query, messages)},
+                "id": "forced_web_search",
+            }
+        ],
     )
-
-
-def _parsed_from_state(state: AgentState) -> ParsedResponse:
-    last_ai = _last_ai_message(state.get("messages", []))
-    if last_ai is None:
-        return ParsedResponse(thought="", final_answer="")
-
-    parsed = last_ai.additional_kwargs.get("react")
-    if parsed:
-        return ParsedResponse(**parsed)
-    return parse_react_response(str(last_ai.content))
 
 
 def _create_default_llm() -> Any:
@@ -227,54 +279,46 @@ def _create_default_llm() -> Any:
 
 
 def agent_node(state: AgentState, llm: Any) -> dict[str, Any]:
-    prompt_messages = [
-        SystemMessage(content=_runtime_system_prompt()),
-        *state.get("messages", []),
-    ]
-    response = llm.invoke(prompt_messages)
-    content = str(getattr(response, "content", response))
-    parsed = parse_react_response(content)
-    latest_query = _last_user_message(state.get("messages", []))
+    messages = state.get("messages", [])
+    prompt_messages = [SystemMessage(content=_runtime_system_prompt()), *messages]
+    response = llm.invoke(prompt_messages, tools=TOOL_SCHEMAS)
+    if not isinstance(response, AIMessage):
+        response = AIMessage(content=str(getattr(response, "content", response)))
+
+    query = _last_user_message(messages)
     steps = state.get("intermediate_steps", [])
+    tool_calls = list(response.tool_calls or [])
+
+    wants_web_search = any(
+        call.get("name") == WEB_SEARCH_TOOL_NAME for call in tool_calls
+    )
+
+    # Guardrail: do not let the model answer a current-fact question from memory.
+    if not tool_calls and not steps and _requires_web_search(query):
+        forced = _forced_web_search_message(query, messages)
+        return {"messages": [forced]}
+
+    # Guardrail: stop a web_search loop after enough current-fact searches.
     if (
-        parsed.final_answer is not None
-        and not steps
-        and _requires_web_search(latest_query)
-    ):
-        action_input = _web_search_action_input(
-            latest_query, state.get("messages", [])
-        )
-        content = (
-            "Thought: I must search the web before answering this - my training "
-            "data may be outdated or the user explicitly asked for sources.\n"
-            "Action: web_search\n"
-            f"Action Input: {action_input}"
-        )
-        parsed = parse_react_response(content)
-    elif (
-        parsed.action == WEB_SEARCH_TOOL_NAME
-        and _requires_web_search(latest_query)
+        wants_web_search
+        and _requires_web_search(query)
         and _web_search_count(steps) >= MAX_CURRENT_FACT_WEB_SEARCHES
     ):
-        content = _forced_final_from_search_observation(
-            _latest_web_search_observation(steps)
+        observation = _latest_web_search_observation(steps)
+        answer = (
+            "Based on the latest web_search results, the current answer is:\n"
+            f"{observation}"
         )
-        parsed = parse_react_response(content)
+        final = AIMessage(content=answer)
+        return {"messages": [final], "final_answer": answer}
 
-    if parsed.final_answer is not None:
-        grounded_answer = _with_source_urls_if_needed(parsed.final_answer, steps)
-        if grounded_answer != parsed.final_answer:
-            content = (
-                f"Thought: {parsed.thought or 'Final answer grounded with source URLs.'}\n"
-                f"Final Answer: {grounded_answer}"
-            )
-            parsed = parse_react_response(content)
+    if tool_calls:
+        return {"messages": [response]}
 
-    ai_message = AIMessage(content=content, additional_kwargs={"react": asdict(parsed)})
-    update: dict[str, Any] = {"messages": [ai_message]}
-    if parsed.final_answer is not None:
-        update["final_answer"] = parsed.final_answer
-    return update
+    # Final answer: ground it with source URLs if web_search was used.
+    answer = _with_source_urls_if_needed(str(response.content), steps)
+    final = AIMessage(content=answer)
+    return {"messages": [final], "final_answer": answer}
 
 
 def _run_tool(action: str, action_input: str) -> str:
@@ -296,21 +340,33 @@ def _normalize_tool_input(action: str, action_input: str) -> str:
 
 
 def tool_node(state: AgentState) -> dict[str, Any]:
-    parsed = _parsed_from_state(state)
-    action = parsed.action or ""
-    action_input = _normalize_tool_input(action, parsed.action_input or "")
-    observation = _run_tool(action, action_input)
-    step: Step = {
-        "thought": parsed.thought,
-        "action": action,
-        "action_input": action_input,
-        "observation": observation,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    steps = [*state.get("intermediate_steps", []), step]
+    messages = state.get("messages", [])
+    last_ai = _last_ai_message(messages)
+    tool_calls = list(last_ai.tool_calls) if last_ai and last_ai.tool_calls else []
+
+    thought = str(last_ai.content) if last_ai else ""
+    new_messages: list[BaseMessage] = []
+    new_steps: list[Step] = []
+    for call in tool_calls:
+        action = call.get("name", "")
+        action_input = _normalize_tool_input(action, _tool_call_action_input(call))
+        observation = _run_tool(action, action_input)
+        new_messages.append(
+            ToolMessage(content=observation, tool_call_id=call.get("id", action))
+        )
+        new_steps.append(
+            {
+                "thought": thought,
+                "action": action,
+                "action_input": action_input,
+                "observation": observation,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
     return {
-        "messages": [HumanMessage(content=f"Observation: {observation}")],
-        "intermediate_steps": steps,
+        "messages": new_messages,
+        "intermediate_steps": [*state.get("intermediate_steps", []), *new_steps],
         "iteration_count": state.get("iteration_count", 0) + 1,
     }
 
@@ -322,12 +378,14 @@ def should_continue(state: AgentState) -> str:
     if state.get("iteration_count", 0) >= MAX_ITERATIONS:
         raise MaxIterationsError(f"Reached max iterations: {MAX_ITERATIONS}")
 
-    parsed = _parsed_from_state(state)
-    return "tools" if parsed.action else "end"
+    last_ai = _last_ai_message(state.get("messages", []))
+    return "tools" if last_ai and last_ai.tool_calls else "end"
 
 
-def build_graph(llm: Any | None = None):
+def build_graph(llm: Any | None = None, tracker: UsageTracker | None = None):
     active_llm = llm or _create_default_llm()
+    if tracker is not None:
+        active_llm = UsageTrackingLLM(active_llm, tracker)
     workflow = StateGraph(AgentState)
     workflow.add_node("agent_node", lambda state: agent_node(state, active_llm))  # type: ignore
     workflow.add_node("tool_node", tool_node)

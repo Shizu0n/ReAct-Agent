@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import json
 import os
+import re
+import time
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 import httpx
 from dotenv import load_dotenv
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
 from agent.redaction import redact_secrets
 
 
-ProviderCall = Callable[[list[BaseMessage]], str]
+# A provider takes the conversation plus optional OpenAI-style tool schemas and
+# returns an AIMessage. The message may carry tool_calls (native function
+# calling) or just text content.
+ProviderCall = Callable[[list[BaseMessage], list[dict] | None], AIMessage]
 
 
 @dataclass(frozen=True)
@@ -33,16 +39,17 @@ class FreeModelFallback:
         if not providers:
             raise RuntimeError(
                 "No free model provider configured. Set GEMINI_API_KEY, GROQ_API_KEY, "
-                "OPENROUTER_API_KEY, CF_ACCOUNT_ID + CF_WORKERS_AI_TOKEN, or "
-                "GITHUB_MODELS_TOKEN + GITHUB_MODELS_MODEL."
+                "or GITHUB_MODELS_TOKEN + GITHUB_MODELS_MODEL."
             )
         self.providers = providers
 
-    def invoke(self, messages: list[BaseMessage]) -> AIMessage:
+    def invoke(
+        self, messages: list[BaseMessage], tools: list[dict] | None = None
+    ) -> AIMessage:
         errors: list[str] = []
         for provider in self.providers:
             try:
-                return AIMessage(content=provider.call(messages))
+                return provider.call(messages, tools)
             except Exception as exc:
                 errors.append(
                     f"{provider.name}: {type(exc).__name__}: {_safe_exception_message(exc)}"
@@ -86,23 +93,6 @@ def configured_model_info() -> list[ModelInfo]:
                 _model_label("GitHub Models", model),
             )
         )
-    if os.getenv("OPENROUTER_API_KEY"):
-        model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
-        models.append(
-            ModelInfo(
-                "openrouter", "OpenRouter", model, _model_label("OpenRouter", model)
-            )
-        )
-    if os.getenv("CF_ACCOUNT_ID") and os.getenv("CF_WORKERS_AI_TOKEN"):
-        model = os.getenv("CF_WORKERS_AI_MODEL", "@cf/meta/llama-3-8b-instruct")
-        models.append(
-            ModelInfo(
-                "cloudflare_workers_ai",
-                "Cloudflare Workers AI",
-                model,
-                _model_label("Cloudflare Workers AI", model),
-            )
-        )
     return models
 
 
@@ -129,106 +119,213 @@ def _role_for_message(message: BaseMessage) -> str:
         return "system"
     if message_type == "ai":
         return "assistant"
+    if message_type == "tool":
+        return "tool"
     return "user"
 
 
-def _openai_compatible_messages(messages: list[BaseMessage]) -> list[dict[str, str]]:
-    return [
-        {"role": _role_for_message(message), "content": str(message.content)}
-        for message in messages
-    ]
+def _openai_messages(messages: list[BaseMessage]) -> list[dict[str, Any]]:
+    """Render the conversation in OpenAI chat-completions format, including
+    assistant tool_calls and tool result messages."""
+    rendered: list[dict[str, Any]] = []
+    for message in messages:
+        role = _role_for_message(message)
+        if isinstance(message, ToolMessage):
+            rendered.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": message.tool_call_id,
+                    "content": str(message.content),
+                }
+            )
+            continue
+
+        entry: dict[str, Any] = {"role": role, "content": str(message.content)}
+        tool_calls = getattr(message, "tool_calls", None)
+        if role == "assistant" and tool_calls:
+            entry["tool_calls"] = [
+                {
+                    "id": call.get("id") or f"call_{index}",
+                    "type": "function",
+                    "function": {
+                        "name": call["name"],
+                        "arguments": json.dumps(call.get("args", {})),
+                    },
+                }
+                for index, call in enumerate(tool_calls)
+            ]
+        rendered.append(entry)
+    return rendered
 
 
-def _gemini_prompt(messages: list[BaseMessage]) -> str:
-    return "\n\n".join(
-        f"{_role_for_message(message).upper()}: {message.content}"
-        for message in messages
+def _usage_metadata(usage: dict[str, Any] | None) -> dict[str, int]:
+    usage = usage or {}
+    input_tokens = int(usage.get("prompt_tokens", 0) or 0)
+    output_tokens = int(usage.get("completion_tokens", 0) or 0)
+    total = int(usage.get("total_tokens", input_tokens + output_tokens) or 0)
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total,
+    }
+
+
+def _ai_message_from_openai(
+    message: dict[str, Any],
+    usage: dict[str, Any] | None = None,
+    response_metadata: dict[str, Any] | None = None,
+) -> AIMessage:
+    content = message.get("content") or ""
+    raw_tool_calls = message.get("tool_calls") or []
+    tool_calls: list[dict[str, Any]] = []
+    for index, call in enumerate(raw_tool_calls):
+        function = call.get("function", {})
+        raw_args = function.get("arguments") or "{}"
+        try:
+            args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
+        except json.JSONDecodeError:
+            args = {"__raw__": raw_args}
+        tool_calls.append(
+            {
+                "name": function.get("name", ""),
+                "args": args,
+                "id": call.get("id") or f"call_{index}",
+            }
+        )
+    return AIMessage(
+        content=str(content),
+        tool_calls=tool_calls,
+        usage_metadata=_usage_metadata(usage),
+        response_metadata=response_metadata or {},
     )
 
 
-def _call_gemini(messages: list[BaseMessage]) -> str:
-    api_key = os.environ["GEMINI_API_KEY"]
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    payload = {
-        "contents": [{"role": "user", "parts": [{"text": _gemini_prompt(messages)}]}]
-    }
-    response = httpx.post(url, params={"key": api_key}, json=payload, timeout=60)
-    _raise_for_status(response, "gemini")
-    data = response.json()
-    parts = data["candidates"][0]["content"]["parts"]
-    return "".join(part.get("text", "") for part in parts).strip()
+def _extract_first_json_object(text: str) -> dict[str, Any] | None:
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    for index in range(start, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start : index + 1])
+                except json.JSONDecodeError:
+                    return None
+    return None
 
 
-def _call_groq(messages: list[BaseMessage]) -> str:
-    headers = {"Authorization": f"Bearer {os.environ['GROQ_API_KEY']}"}
-    payload = {
-        "model": os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
-        "messages": _openai_compatible_messages(messages),
-        "temperature": 0,
-    }
-    response = httpx.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers=headers,
-        json=payload,
-        timeout=60,
+def _recover_tool_use_failed(response: httpx.Response) -> AIMessage | None:
+    """Some OpenAI-compatible providers (notably Groq's llama models) return
+    HTTP 400 tool_use_failed when the model emits a function call in a
+    non-standard <function=name{...}> wire format. The intended call is in
+    error.failed_generation; parse it back into a proper tool call."""
+    try:
+        error = response.json().get("error", {})
+    except (ValueError, AttributeError):
+        return None
+    if error.get("code") != "tool_use_failed":
+        return None
+
+    generation = str(error.get("failed_generation", ""))
+    match = re.search(r"<function=([A-Za-z_]\w*)", generation)
+    if not match:
+        return None
+    args = _extract_first_json_object(generation[match.end():])
+    if args is None:
+        return None
+    return AIMessage(
+        content="",
+        tool_calls=[{"name": match.group(1), "args": args, "id": "recovered_0"}],
+        usage_metadata=_usage_metadata(None),
     )
-    _raise_for_status(response, "groq")
-    return response.json()["choices"][0]["message"]["content"].strip()
 
 
-def _call_openrouter(messages: list[BaseMessage]) -> str:
-    headers = {
-        "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
-        "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost"),
-        "X-Title": os.getenv("OPENROUTER_APP_NAME", "react-agent"),
-    }
-    payload = {
-        "model": os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free"),
-        "messages": _openai_compatible_messages(messages),
-        "temperature": 0,
-    }
-    response = httpx.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers=headers,
-        json=payload,
-        timeout=60,
+@dataclass(frozen=True)
+class OpenAICompatProvider:
+    name: str
+    url: str
+    model_env: str
+    model_default: str
+    headers_factory: Callable[[], dict[str, str]]
+    extra_payload: dict[str, Any] | None = None
+
+    def model(self) -> str:
+        return os.getenv(self.model_env, self.model_default)
+
+    def __call__(
+        self, messages: list[BaseMessage], tools: list[dict] | None
+    ) -> AIMessage:
+        payload: dict[str, Any] = {
+            "model": self.model(),
+            "messages": _openai_messages(messages),
+            "temperature": 0,
+        }
+        if self.extra_payload:
+            payload.update(self.extra_payload)
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        started = time.perf_counter()
+        response = httpx.post(
+            self.url, headers=self.headers_factory(), json=payload, timeout=60
+        )
+        metadata = {
+            "provider": self.name,
+            "model": self.model(),
+            "latency_ms": round((time.perf_counter() - started) * 1000),
+        }
+        if response.status_code == 400 and tools:
+            recovered = _recover_tool_use_failed(response)
+            if recovered is not None:
+                recovered.response_metadata = metadata
+                return recovered
+        _raise_for_status(response, self.name)
+        data = response.json()
+        return _ai_message_from_openai(
+            data["choices"][0]["message"], data.get("usage"), metadata
+        )
+
+
+def _gemini_provider() -> OpenAICompatProvider:
+    return OpenAICompatProvider(
+        name="gemini",
+        url="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        model_env="GEMINI_MODEL",
+        model_default="gemini-2.5-flash",
+        headers_factory=lambda: {
+            "Authorization": f"Bearer {os.environ['GEMINI_API_KEY']}"
+        },
     )
-    _raise_for_status(response, "openrouter")
-    return response.json()["choices"][0]["message"]["content"].strip()
 
 
-def _call_cloudflare(messages: list[BaseMessage]) -> str:
-    account_id = os.environ["CF_ACCOUNT_ID"]
-    token = os.environ["CF_WORKERS_AI_TOKEN"]
-    model = os.getenv("CF_WORKERS_AI_MODEL", "@cf/meta/llama-3-8b-instruct")
-    url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{model}"
-    headers = {"Authorization": f"Bearer {token}"}
-    payload = {"messages": _openai_compatible_messages(messages)}
-    response = httpx.post(url, headers=headers, json=payload, timeout=60)
-    _raise_for_status(response, "cloudflare_workers_ai")
-    data = response.json()
-    return data["result"]["response"].strip()
-
-
-def _call_github_models(messages: list[BaseMessage]) -> str:
-    headers = {
-        "Authorization": f"Bearer {os.environ['GITHUB_MODELS_TOKEN']}",
-        "Accept": "application/vnd.github+json",
-    }
-    payload = {
-        "model": os.environ["GITHUB_MODELS_MODEL"],
-        "messages": _openai_compatible_messages(messages),
-        "temperature": 0,
-    }
-    response = httpx.post(
-        "https://models.github.ai/inference/chat/completions",
-        headers=headers,
-        json=payload,
-        timeout=60,
+def _groq_provider() -> OpenAICompatProvider:
+    return OpenAICompatProvider(
+        name="groq",
+        url="https://api.groq.com/openai/v1/chat/completions",
+        model_env="GROQ_MODEL",
+        model_default="llama-3.3-70b-versatile",
+        headers_factory=lambda: {
+            "Authorization": f"Bearer {os.environ['GROQ_API_KEY']}"
+        },
     )
-    _raise_for_status(response, "github_models")
-    return response.json()["choices"][0]["message"]["content"].strip()
+
+
+def _github_models_provider() -> OpenAICompatProvider:
+    return OpenAICompatProvider(
+        name="github_models",
+        url="https://models.github.ai/inference/chat/completions",
+        model_env="GITHUB_MODELS_MODEL",
+        model_default="openai/gpt-4o-mini",
+        headers_factory=lambda: {
+            "Authorization": f"Bearer {os.environ['GITHUB_MODELS_TOKEN']}",
+            "Accept": "application/vnd.github+json",
+        },
+    )
 
 
 def configured_free_providers() -> list[FreeProvider]:
@@ -236,13 +333,76 @@ def configured_free_providers() -> list[FreeProvider]:
 
     providers: list[FreeProvider] = []
     if os.getenv("GEMINI_API_KEY"):
-        providers.append(FreeProvider("gemini", _call_gemini))
+        providers.append(FreeProvider("gemini", _gemini_provider()))
     if os.getenv("GROQ_API_KEY"):
-        providers.append(FreeProvider("groq", _call_groq))
+        providers.append(FreeProvider("groq", _groq_provider()))
     if os.getenv("GITHUB_MODELS_TOKEN") and os.getenv("GITHUB_MODELS_MODEL"):
-        providers.append(FreeProvider("github_models", _call_github_models))
-    if os.getenv("OPENROUTER_API_KEY"):
-        providers.append(FreeProvider("openrouter", _call_openrouter))
-    if os.getenv("CF_ACCOUNT_ID") and os.getenv("CF_WORKERS_AI_TOKEN"):
-        providers.append(FreeProvider("cloudflare_workers_ai", _call_cloudflare))
+        providers.append(FreeProvider("github_models", _github_models_provider()))
     return providers
+
+
+# Approximate public list prices (USD per 1M tokens) for the underlying models,
+# used only to estimate what a run would cost at paid rates. Free-tier usage is
+# billed at $0; this is an at-scale reference, not an invoice.
+MODEL_PRICING_USD_PER_1M: dict[str, tuple[float, float]] = {
+    "gemini-2.5-flash": (0.30, 2.50),
+    "llama-3.3-70b-versatile": (0.59, 0.79),
+    "openai/gpt-4o-mini": (0.15, 0.60),
+}
+
+
+def _estimate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
+    input_price, output_price = MODEL_PRICING_USD_PER_1M.get(model, (0.0, 0.0))
+    return (input_tokens * input_price + output_tokens * output_price) / 1_000_000
+
+
+class UsageTracker:
+    """Collects per-call token usage, latency, and estimated cost across a run."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def record(self, message: AIMessage) -> None:
+        usage = getattr(message, "usage_metadata", None) or {}
+        metadata = getattr(message, "response_metadata", None) or {}
+        input_tokens = int(usage.get("input_tokens", 0) or 0)
+        output_tokens = int(usage.get("output_tokens", 0) or 0)
+        model = str(metadata.get("model", ""))
+        self.calls.append(
+            {
+                "provider": metadata.get("provider", ""),
+                "model": model,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": int(usage.get("total_tokens", input_tokens + output_tokens)),
+                "latency_ms": int(metadata.get("latency_ms", 0) or 0),
+                "estimated_cost_usd": _estimate_cost_usd(model, input_tokens, output_tokens),
+            }
+        )
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "llm_calls": len(self.calls),
+            "input_tokens": sum(c["input_tokens"] for c in self.calls),
+            "output_tokens": sum(c["output_tokens"] for c in self.calls),
+            "total_tokens": sum(c["total_tokens"] for c in self.calls),
+            "estimated_cost_usd": round(
+                sum(c["estimated_cost_usd"] for c in self.calls), 6
+            ),
+            "providers": list(
+                dict.fromkeys(c["provider"] for c in self.calls if c["provider"])
+            ),
+        }
+
+
+class UsageTrackingLLM:
+    """Wraps an llm, recording each call's usage into a UsageTracker."""
+
+    def __init__(self, llm: Any, tracker: UsageTracker) -> None:
+        self._llm = llm
+        self._tracker = tracker
+
+    def invoke(self, messages: list[BaseMessage], tools: list[dict] | None = None) -> AIMessage:
+        message = self._llm.invoke(messages, tools)
+        self._tracker.record(message)
+        return message

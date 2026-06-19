@@ -1,0 +1,22 @@
+{"id": "math-001", "category": "math", "query": "What is 17 * 23 + sqrt(1764)?", "expect_tools": ["calculator"], "checks": [{"type": "numeric", "value": 433}], "note": "regression: a regex shortcut once dropped 17*23 and answered 42"}
+{"id": "math-002", "category": "math", "query": "Compute 144 / 12 + 7 * 3", "expect_tools": ["calculator"], "checks": [{"type": "numeric", "value": 33}]}
+{"id": "math-003", "category": "math", "query": "What is 2 to the power of 10?", "expect_tools": ["calculator"], "checks": [{"type": "numeric", "value": 1024}]}
+{"id": "math-004", "category": "math", "query": "What is the square root of 2025?", "expect_tools": ["calculator"], "checks": [{"type": "numeric", "value": 45}]}
+{"id": "math-005", "category": "math", "query": "Calculate 15% of 240.", "expect_tools": ["calculator"], "checks": [{"type": "numeric", "value": 36}]}
+{"id": "math-006", "category": "math", "query": "What is 1000 - 7 * 3 * 11?", "expect_tools": ["calculator"], "checks": [{"type": "numeric", "value": 769}]}
+{"id": "code-001", "category": "code", "query": "Generate the first 10 Fibonacci numbers using Python.", "expect_tools": ["python_executor"], "checks": [{"type": "contains_all", "values": ["13", "21", "34"]}], "note": "regression: agent used to return unexecuted code"}
+{"id": "code-002", "category": "code", "query": "Use Python to compute the factorial of 12.", "expect_tools": ["python_executor"], "checks": [{"type": "numeric", "value": 479001600}]}
+{"id": "code-003", "category": "code", "query": "What is the sum of squares from 1 to 20? Use Python.", "expect_tools": ["python_executor"], "checks": [{"type": "numeric", "value": 2870}]}
+{"id": "code-004", "category": "code", "query": "Use Python to compute the mean and median of [12, 18, 21, 25, 31].", "expect_tools": ["python_executor"], "checks": [{"type": "contains_all", "values": ["21.4", "21"]}]}
+{"id": "code-005", "category": "code", "query": "Sort this list ascending with Python: [5, 2, 9, 1, 7].", "expect_tools": ["python_executor"], "checks": [{"type": "contains_all", "values": ["1", "2", "5", "7", "9"]}]}
+{"id": "code-006", "category": "code", "query": "Solve 2*x + 4 = 0 for x using Python.", "expect_tools": ["python_executor"], "checks": [{"type": "numeric", "value": -2}]}
+{"id": "web-001", "category": "web", "query": "What is the latest stable version of Python?", "expect_tools": ["web_search"], "checks": [{"type": "regex", "pattern": "3\\.\\d+"}, {"type": "regex", "pattern": "https?://"}]}
+{"id": "web-002", "category": "web", "query": "Search for what LangGraph is and summarize it in one sentence.", "expect_tools": ["web_search"], "checks": [{"type": "contains_any", "values": ["langgraph", "graph", "agent"]}, {"type": "regex", "pattern": "https?://"}]}
+{"id": "web-003", "category": "web", "query": "What is the current latest LTS version of Node.js?", "expect_tools": ["web_search"], "checks": [{"type": "regex", "pattern": "\\d+\\.\\d+"}, {"type": "regex", "pattern": "https?://"}]}
+{"id": "direct-001", "category": "direct", "query": "Explain the difference between a list and a tuple in Python in one sentence.", "expect_tools": [], "checks": [{"type": "contains_any", "values": ["mutable", "immutable", "change"]}]}
+{"id": "direct-002", "category": "direct", "query": "What does the acronym API stand for?", "expect_tools": [], "checks": [{"type": "contains_all", "values": ["application", "programming", "interface"]}]}
+{"id": "direct-003", "category": "direct", "query": "Give me a one-sentence definition of recursion.", "expect_tools": [], "checks": [{"type": "contains_any", "values": ["itself", "self"]}]}
+{"id": "direct-004", "category": "direct", "query": "What is the capital of France?", "expect_tools": [], "checks": [{"type": "contains_any", "values": ["paris"]}]}
+{"id": "direct-005", "category": "direct", "query": "In one sentence, what is the purpose of a ReAct agent?", "expect_tools": [], "checks": [{"type": "contains_any", "values": ["reason", "tool", "act", "observ"]}]}
+{"id": "edge-001", "category": "edge", "query": "Is 7919 a prime number? Use Python to check.", "expect_tools": ["python_executor"], "checks": [{"type": "contains_any", "values": ["prime", "true", "yes"]}]}
+{"id": "edge-002", "category": "edge", "query": "A recipe needs 3 eggs per cake. How many eggs for 17 cakes? Use the calculator.", "expect_tools": ["calculator"], "checks": [{"type": "numeric", "value": 51}]}

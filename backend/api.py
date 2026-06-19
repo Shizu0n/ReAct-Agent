@@ -21,7 +21,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from agent.graph import TOOLS, build_graph
-from agent.llms import configured_model_info
+from agent.llms import UsageTracker, configured_model_info
 from agent.redaction import configure_secure_logging
 from agent.state import MaxIterationsError
 
@@ -50,6 +50,7 @@ class AgentResponse(BaseModel):
     tools_used: list[str]
     latency_ms: int
     status: str
+    usage: dict[str, Any] = Field(default_factory=dict)
 
 
 class ModelInfoResponse(BaseModel):
@@ -142,10 +143,15 @@ def _store_response(response: AgentResponse) -> None:
     RUNS[response.run_id] = response
 
 
-def _build_response(run_id: str, started_at: float, final_state: dict) -> AgentResponse:
+def _build_response(
+    run_id: str,
+    started_at: float,
+    final_state: dict,
+    usage: dict[str, Any] | None = None,
+) -> AgentResponse:
     trace = final_state.get("intermediate_steps", [])
     result = final_state.get("final_answer") or ""
-    return _response_from_trace(run_id, started_at, result, trace)
+    return _response_from_trace(run_id, started_at, result, trace, usage)
 
 
 def _response_from_trace(
@@ -153,6 +159,7 @@ def _response_from_trace(
     started_at: float,
     result: str,
     trace: list[dict[str, Any]],
+    usage: dict[str, Any] | None = None,
 ) -> AgentResponse:
     total_time = time.perf_counter() - started_at
     tools_used = list(
@@ -169,6 +176,7 @@ def _response_from_trace(
         tools_used=tools_used,
         latency_ms=round(total_time * 1000),
         status="success",
+        usage=usage or {},
     )
 
 
@@ -178,9 +186,10 @@ def _run_agent(
     started_at: float,
     history: list[ChatMessageRequest] | None = None,
 ) -> AgentResponse:
-    graph = build_graph()
+    tracker = UsageTracker()
+    graph = build_graph(tracker=tracker)
     final_state = graph.invoke(_initial_state(query, history))
-    response = _build_response(run_id, started_at, final_state)
+    response = _build_response(run_id, started_at, final_state, tracker.summary())
     _store_response(response)
     return response
 
@@ -196,6 +205,7 @@ def _sse_payload(
     timestamp: str | None = None,
     tools_used: list[str] | None = None,
     status: str = "running",
+    usage: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     payload: dict[str, Any] = {
         "type": event_type,
@@ -214,6 +224,8 @@ def _sse_payload(
         payload["elapsed_ms"] = round((time.perf_counter() - started_at) * 1000)
     if tools_used is not None:
         payload["tools_used"] = tools_used
+    if usage is not None:
+        payload["usage"] = usage
 
     return {
         "data": json.dumps(
@@ -231,9 +243,10 @@ async def _stream_agent(
 ) -> AsyncIterator[dict[str, str]]:
     printed_steps = 0
     final_state = _initial_state(query, history)
+    tracker = UsageTracker()
 
     try:
-        graph = build_graph()
+        graph = build_graph(tracker=tracker)
         for state in graph.stream(final_state, stream_mode="values"):
             final_state = state
             steps = state.get("intermediate_steps", [])
@@ -301,7 +314,7 @@ async def _stream_agent(
         )
         return
 
-    response = _build_response(run_id, started_at, final_state)
+    response = _build_response(run_id, started_at, final_state, tracker.summary())
     _store_response(response)
     yield _sse_payload(
         "final",
@@ -311,6 +324,7 @@ async def _stream_agent(
         started_at=started_at,
         tools_used=response.tools_used,
         status="success",
+        usage=response.usage,
     )
 
 
