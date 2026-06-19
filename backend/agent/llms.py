@@ -219,6 +219,20 @@ def _extract_first_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _is_unsupported_temperature(response: httpx.Response) -> bool:
+    """OpenAI's gpt-5 / o-series models (served via GitHub Models) reject any
+    non-default temperature with HTTP 400. Detect that specific error so the
+    request can be retried without the temperature field instead of failing."""
+    try:
+        error = response.json().get("error", {})
+    except (ValueError, AttributeError):
+        return False
+    return (
+        error.get("param") == "temperature"
+        and error.get("code") == "unsupported_value"
+    )
+
+
 def _recover_tool_use_failed(response: httpx.Response) -> AIMessage | None:
     """Some OpenAI-compatible providers (notably Groq's llama models) return
     HTTP 400 tool_use_failed when the model emits a function call in a
@@ -284,11 +298,30 @@ class OpenAICompatProvider:
             if recovered is not None:
                 recovered.response_metadata = metadata
                 return recovered
+        if response.status_code == 400 and _is_unsupported_temperature(response):
+            payload.pop("temperature", None)
+            started = time.perf_counter()
+            response = httpx.post(
+                self.url, headers=self.headers_factory(), json=payload, timeout=60
+            )
+            metadata["latency_ms"] = round((time.perf_counter() - started) * 1000)
         _raise_for_status(response, self.name)
         data = response.json()
-        return _ai_message_from_openai(
-            data["choices"][0]["message"], data.get("usage"), metadata
+        choice = data["choices"][0]
+        message = _ai_message_from_openai(
+            choice["message"], data.get("usage"), metadata
         )
+        # An HTTP 200 with empty content and no tool call is not a usable answer
+        # (Gemini does this under quota pressure or safety/recitation stops).
+        # Treat it as a provider failure so the fallback chain tries the next one
+        # instead of returning a blank "success" to the user.
+        if not str(message.content).strip() and not message.tool_calls:
+            finish_reason = choice.get("finish_reason", "unknown")
+            raise RuntimeError(
+                f"{self.name} returned an empty completion "
+                f"(finish_reason={finish_reason})"
+            )
+        return message
 
 
 def _gemini_provider() -> OpenAICompatProvider:

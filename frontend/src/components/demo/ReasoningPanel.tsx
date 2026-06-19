@@ -285,7 +285,7 @@ function TelemetryStrip({
         <TelemetryItem
           icon={<Hash className="h-3.5 w-3.5" />}
           label="tokens"
-          value={`${usage!.total_tokens.toLocaleString()} (${usage!.llm_calls} calls)`}
+          value={`${usage!.total_tokens.toLocaleString('en-US')} (${usage!.llm_calls} calls)`}
         />
       ) : null}
       {hasUsage ? (

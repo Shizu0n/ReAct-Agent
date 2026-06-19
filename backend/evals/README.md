@@ -21,10 +21,21 @@ python -m evals.evaluate --category math  # one category
 python -m evals.evaluate --offline        # skip live web_search cases
 python -m evals.evaluate --delay 3        # seconds between cases (rate limits)
 python -m evals.evaluate --threshold 0.8  # exit non-zero below this success rate
+python -m evals.evaluate --publish        # also write the committed baseline.json
 ```
 
 Results are written to `evals/results.json` (machine-readable) and
 `evals/results.md` (table). Both are git-ignored run artifacts.
+
+## Publishing the frontend baseline
+
+`--publish` additionally writes `evals/baseline.json` — a trimmed, committed
+summary (per-case pass/fail plus the active model, no full answers). The API
+serves it at `GET /evals`, and the About page renders it under "How it scores".
+Until a baseline is committed, the endpoint returns `{"status": "unavailable"}`
+and the section shows a "baseline pending" state. To publish: run the full
+suite when a provider's quota is healthy, then commit `baseline.json` and
+redeploy.
 
 ## Dataset
 

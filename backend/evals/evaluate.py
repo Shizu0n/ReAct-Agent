@@ -30,12 +30,13 @@ from langchain_core.messages import HumanMessage
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agent.graph import build_graph  # noqa: E402
-from agent.llms import load_model_environment  # noqa: E402
+from agent.llms import configured_model_info, load_model_environment  # noqa: E402
 from agent.state import MaxIterationsError  # noqa: E402
 
 CASES_PATH = Path(__file__).with_name("cases.jsonl")
 RESULTS_JSON = Path(__file__).with_name("results.json")
 RESULTS_MD = Path(__file__).with_name("results.md")
+BASELINE_JSON = Path(__file__).with_name("baseline.json")
 
 NUMBER_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 
@@ -183,6 +184,39 @@ def render_table(results: list[dict], summary: dict) -> str:
     return "\n".join(lines)
 
 
+def write_baseline(results: list[dict], summary: dict, generated_at: str) -> None:
+    """Write the published, frontend-facing baseline. Trimmed to per-case
+    pass/fail (no full answers) plus the active model, so it is safe to commit
+    and serve at /evals."""
+    models = configured_model_info()
+    active = models[0] if models else None
+    BASELINE_JSON.write_text(
+        json.dumps(
+            {
+                "generated_at": generated_at,
+                "model": (
+                    {"provider": active.provider_label, "label": active.label}
+                    if active
+                    else None
+                ),
+                "summary": summary,
+                "cases": [
+                    {
+                        "id": r["id"],
+                        "category": r["category"],
+                        "answer_pass": r["answer_pass"],
+                        "tool_pass": r["tool_pass"],
+                        "latency_ms": r["latency_ms"],
+                    }
+                    for r in results
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
 def write_markdown(results: list[dict], summary: dict, generated_at: str) -> None:
     rows = ["| id | category | answer | tool | latency |", "|----|----------|--------|------|---------|"]
     for r in results:
@@ -217,6 +251,11 @@ def main() -> int:
         default=0.0,
         help="exit non-zero if task success rate is below this",
     )
+    parser.add_argument(
+        "--publish",
+        action="store_true",
+        help="also write evals/baseline.json (committed, served at /evals)",
+    )
     args = parser.parse_args()
 
     load_model_environment()
@@ -249,9 +288,14 @@ def main() -> int:
         encoding="utf-8",
     )
     write_markdown(results, summary, generated_at)
+    if args.publish:
+        write_baseline(results, summary, generated_at)
 
     print("\n" + render_table(results, summary))
-    print(f"\nResults written to {RESULTS_JSON.name} and {RESULTS_MD.name}")
+    written = f"{RESULTS_JSON.name} and {RESULTS_MD.name}"
+    if args.publish:
+        written += f" and {BASELINE_JSON.name}"
+    print(f"\nResults written to {written}")
 
     return 1 if summary["task_success_rate"] < args.threshold else 0
 

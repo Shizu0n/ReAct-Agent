@@ -134,6 +134,85 @@ class LlmSelectionTests(unittest.TestCase):
             first.tool_calls[0]["args"]["expression"], "17 * 23 + math.sqrt(1764)"
         )
 
+    def test_empty_completion_triggers_provider_fallback(self):
+        # Regression: agent returned a blank "success" answer when Gemini replied
+        # HTTP 200 with empty content and no tool call (quota/safety stop). The
+        # empty completion must be treated as a failure so the chain falls back.
+        # Found by /qa on 2026-06-19.
+        # Report: .gstack/qa-reports/qa-report-react-agent-ml-vercel-app-2026-06-19.md
+        from agent.llms import FreeModelFallback, FreeProvider, _gemini_provider
+
+        empty_response = httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://gemini.test/v1"),
+            json={
+                "choices": [{"message": {"content": ""}, "finish_reason": "STOP"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 0, "total_tokens": 10},
+            },
+        )
+
+        def groq_call(messages, tools=None):
+            return AIMessage(content="The sum of squares from 1 to 20 is 2870.")
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "free-tier-key"}, clear=True):
+            with patch("agent.llms.httpx.post", return_value=empty_response):
+                fallback = FreeModelFallback(
+                    [
+                        FreeProvider("gemini", _gemini_provider()),
+                        FreeProvider("groq", groq_call),
+                    ]
+                )
+                result = fallback.invoke([HumanMessage(content="sum of squares 1..20")])
+
+        self.assertEqual(result.content, "The sum of squares from 1 to 20 is 2870.")
+
+    def test_retries_without_temperature_when_model_rejects_it(self):
+        # Regression: gpt-5/o-series via GitHub Models reject temperature:0 with
+        # HTTP 400. The provider must drop temperature and retry instead of
+        # failing every call. Found by /qa on 2026-06-19.
+        from agent.llms import _github_models_provider
+
+        reject = httpx.Response(
+            400,
+            request=httpx.Request("POST", "https://models.github.test/v1"),
+            json={
+                "error": {
+                    "message": "Unsupported value: 'temperature' does not support 0",
+                    "type": "invalid_request_error",
+                    "param": "temperature",
+                    "code": "unsupported_value",
+                }
+            },
+        )
+        ok = httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://models.github.test/v1"),
+            json={
+                "choices": [{"message": {"content": "42"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+            },
+        )
+        calls: list[dict] = []
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            calls.append(dict(json))  # snapshot; payload is mutated in place
+            return reject if len(calls) == 1 else ok
+
+        env = {
+            "REACT_AGENT_SKIP_DOTENV": "1",
+            "GITHUB_MODELS_TOKEN": "token",
+            "GITHUB_MODELS_MODEL": "gpt-5-mini",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with patch("agent.llms.httpx.post", side_effect=fake_post):
+                result = _github_models_provider()(
+                    [HumanMessage(content="what is the answer")], None
+                )
+
+        self.assertEqual(result.content, "42")
+        self.assertIn("temperature", calls[0])  # first attempt included it
+        self.assertNotIn("temperature", calls[1])  # retry dropped it
+
     def test_tool_use_recovery_ignores_unrelated_400(self):
         from agent.llms import _recover_tool_use_failed
 
