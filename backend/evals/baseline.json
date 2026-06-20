@@ -1,0 +1,197 @@
+{
+  "generated_at": "2026-06-20T13:07:39.556960+00:00",
+  "model": {
+    "provider": "Gemini",
+    "label": "Gemini 2.5 Flash"
+  },
+  "summary": {
+    "total": 22,
+    "answer_pass": 22,
+    "tool_pass": 22,
+    "task_success_rate": 1.0,
+    "tool_selection_rate": 1.0,
+    "by_category": {
+      "math": {
+        "total": 6,
+        "answer_pass": 6,
+        "tool_pass": 6
+      },
+      "code": {
+        "total": 6,
+        "answer_pass": 6,
+        "tool_pass": 6
+      },
+      "web": {
+        "total": 3,
+        "answer_pass": 3,
+        "tool_pass": 3
+      },
+      "direct": {
+        "total": 5,
+        "answer_pass": 5,
+        "tool_pass": 5
+      },
+      "edge": {
+        "total": 2,
+        "answer_pass": 2,
+        "tool_pass": 2
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "math-001",
+      "category": "math",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 4259
+    },
+    {
+      "id": "math-002",
+      "category": "math",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 2524
+    },
+    {
+      "id": "math-003",
+      "category": "math",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 2911
+    },
+    {
+      "id": "math-004",
+      "category": "math",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 3968
+    },
+    {
+      "id": "math-005",
+      "category": "math",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 3337
+    },
+    {
+      "id": "math-006",
+      "category": "math",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 3278
+    },
+    {
+      "id": "code-001",
+      "category": "code",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 9268
+    },
+    {
+      "id": "code-002",
+      "category": "code",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 4072
+    },
+    {
+      "id": "code-003",
+      "category": "code",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 3461
+    },
+    {
+      "id": "code-004",
+      "category": "code",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 3726
+    },
+    {
+      "id": "code-005",
+      "category": "code",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 5244
+    },
+    {
+      "id": "code-006",
+      "category": "code",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 4022
+    },
+    {
+      "id": "web-001",
+      "category": "web",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 4663
+    },
+    {
+      "id": "web-002",
+      "category": "web",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 4680
+    },
+    {
+      "id": "web-003",
+      "category": "web",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 3962
+    },
+    {
+      "id": "direct-001",
+      "category": "direct",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 1380
+    },
+    {
+      "id": "direct-002",
+      "category": "direct",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 2380
+    },
+    {
+      "id": "direct-003",
+      "category": "direct",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 1360
+    },
+    {
+      "id": "direct-004",
+      "category": "direct",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 1682
+    },
+    {
+      "id": "direct-005",
+      "category": "direct",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 1943
+    },
+    {
+      "id": "edge-001",
+      "category": "edge",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 5662
+    },
+    {
+      "id": "edge-002",
+      "category": "edge",
+      "answer_pass": true,
+      "tool_pass": true,
+      "latency_ms": 3828
+    }
+  ]
+}
