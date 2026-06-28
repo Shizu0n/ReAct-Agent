@@ -17,13 +17,14 @@ react-agent/
 ├── backend/              FastAPI app, LangGraph ReAct agent, tools, tests
 │   ├── agent/
 │   │   ├── graph.py      StateGraph: agent_node, tool_node, should_continue
-│   │   ├── llms.py       FreeModelFallback chain (Gemini → Groq → GitHub), usage tracking
+│   │   ├── llms.py       FreeModelFallback chain + per-role provider preference, usage tracking
 │   │   ├── tools.py      web_search, python_executor, calculator
+│   │   ├── suggestions.py Conversation-aware prompt suggester (Groq-preferred, static fallback)
 │   │   ├── prompts.py    SYSTEM_PROMPT for native tool calling
 │   │   ├── redaction.py  Secret redaction for logs and error messages
 │   │   └── state.py      AgentState TypedDict, MaxIterationsError
 │   ├── api.py            FastAPI routes, SSE streaming, CORS, rate limiting, trace store
-│   ├── main.py           Standalone uvicorn entrypoint
+│   ├── main.py           Scripted ReAct demo runner (fake LLM, no API keys)
 │   ├── evals/            Agent evaluation harness (task success + tool selection)
 │   └── tests/            Unit tests (agent, API, LLMs, redaction)
 ├── frontend/             React 19, TypeScript, Vite, TailwindCSS
@@ -32,7 +33,7 @@ react-agent/
 │       ├── hooks/useAgent.ts SSE client, session persistence (localStorage), mock fallback
 │       ├── components/
 │       │   ├── ChatWorkspace.tsx     Chat + reasoning trace layout
-│       │   ├── demo/ChatPanel.tsx    Message list, starter suggestions, contextual prompts
+│       │   ├── demo/ChatPanel.tsx    Message list, static starter prompts, server-generated suggestions
 │       │   ├── demo/ReasoningPanel.tsx  Trace timeline with Thought/Action/Observe steps
 │       │   ├── demo/TraceDock.tsx    Telemetry strip, progress bar, run metadata
 │       │   ├── ui/animated-ai-chat.tsx  Auto-resizing input with send/clear controls
@@ -56,7 +57,7 @@ react-agent/
 
 ### Frontend flow
 
-The `useAgent` hook POSTs to `/api/run` with `stream: true`, parses SSE progressively (`parseSseEvents` + `sseDataFromEvent`), and converts each payload into a `Step` on the timeline. The session (messages + steps + runSummary) persists in `localStorage`. If `VITE_AGENT_MOCK=true`, it runs a mock sequence without an API. Connection state (`checking`, `online`, `mock`, `error`) is loaded via `/api/config`.
+The `useAgent` hook POSTs to `/api/run` with `stream: true`, parses SSE progressively (`parseSseEvents` + `sseDataFromEvent`), and converts each payload into a `Step` on the timeline. The session (messages + steps + runSummary) persists in `localStorage`. If `VITE_AGENT_MOCK=true`, it runs a mock sequence without an API. Connection state (`checking`, `online`, `mock`, `error`) is loaded via `/api/config`. After a run completes, it fetches `/api/suggestions` with the conversation and renders the returned follow-up prompts.
 
 The interface has two tabs: **Chat** (conversation workspace with reasoning panel) and **About** (portfolio landing with hero, how it works, stack). The left sidebar is drag-resizable. The reasoning panel (right side on desktop) or bottom sheet (mobile) shows each step with a colored badge (Thought / Action / Observe / Final), timestamp, cycle, and tool/input/elapsed metadata.
 
@@ -79,6 +80,7 @@ flowchart TB
             Router{"should_continue"}
         end
         Store["Trace Store<br/>(last 100 runs)"]
+        SUG["POST /suggestions<br/>(suggester)"]
     end
 
     subgraph Tools["Tools"]
@@ -104,12 +106,15 @@ flowchart TB
     TN --> WS
     TN --> PE
     TN --> CA
-    AN -->|"invoke + tools"| G
+    AN -->|"invoke + tools (prefers)"| G
     G -.->|"fallback"| GR
     GR -.->|"fallback"| GH
     Store -->|"SSE events"| Hook
     Hook -->|"steps"| Trace
     Hook -->|"messages"| UI
+    Hook -->|"after answer"| SUG
+    SUG -.->|"prefers"| GR
+    SUG -->|"3 prompts"| Hook
 
     style Frontend fill:#1a1a2e,stroke:#8BD3FF,color:#fff
     style Backend fill:#1a1a2e,stroke:#F6C177,color:#fff
@@ -134,9 +139,22 @@ The agent does not use OpenAI or Anthropic. The default chain uses only provider
 2. `GROQ_API_KEY` with `GROQ_MODEL`, default `llama-3.3-70b-versatile`
 3. `GITHUB_MODELS_TOKEN` + `GITHUB_MODELS_MODEL`
 
-All three are reached through one OpenAI-compatible tool-calling path (Gemini via its OpenAI-compat endpoint), so the agent uses native function calling, not text parsing. `FreeModelFallback` tries each provider in order. If one fails, it skips to the next. If all fail, it raises `RuntimeError` with concatenated errors (secrets redacted). The `/config` endpoint returns the active model and fallbacks; the frontend displays this in the chat status bar.
+All three are reached through one OpenAI-compatible tool-calling path (Gemini via its OpenAI-compat endpoint), so the agent uses native function calling, not text parsing. `FreeModelFallback` tries each provider in order. If one fails, it skips to the next. If all fail, it raises `RuntimeError` with concatenated errors (secrets redacted).
+
+### Per-role provider preference
+
+Two roles each prefer a different provider while still falling back across the whole chain, via `providers_preferring(name)`:
+
+- **Responder** (the agent's answers) prefers **Gemini** — more accurate on knowledge questions. Override with `RESPONDER_PROVIDER`.
+- **Suggester** (the prompt suggestions, below) prefers **Groq** — fast, with a generous free tier, so the frequent suggestion calls do not compete with the responder for Gemini's tighter quota. Override with `SUGGESTER_PROVIDER`.
+
+The preference only reorders the front of the chain. If the preferred provider is missing or fails, the role degrades to the next available one, so a single-key setup still works. `/config` reports the responder's active model, which the frontend shows in the chat status bar.
 
 These providers may have their own quotas, terms, and limits. For absolute zero cost, run a local model and adapt `agent/llms.py`; a free cloud API is still a cloud API, not a contractual miracle.
+
+## Prompt suggestions
+
+After each answer, the frontend POSTs the recent conversation to `/suggestions`. The suggester (`agent/suggestions.py`) makes one Groq-preferred LLM call that, given the conversation plus the agent's live tool list, returns up to three short follow-up prompts as JSON. It is tool-agnostic — the tool list is passed in at call time, not hardcoded with per-tool rules — so it generalizes to any toolset. The call is non-blocking (the answer renders first), exempt from the rate limit, and degrades to a small generic static list on any failure, empty conversation, or unparseable model output. The empty-chat screen keeps a fixed set of starter prompts, since there is no conversation to analyze yet.
 
 ## Frontend
 
@@ -144,11 +162,11 @@ These providers may have their own quotas, terms, and limits. For absolute zero 
 | --- | --- |
 | `App.tsx` | Shell: resizable left sidebar, desktop/mobile toggle, Chat/About tabs, shell state persistence in localStorage |
 | `ChatWorkspace` | Two-column layout: chat + reasoning panel. Header with status, active model, and available tools |
-| `ChatPanel` | Message list, empty state with starter suggestions, contextual post-response suggestions, auto-scroll |
+| `ChatPanel` | Message list, empty state with static starter prompts, server-generated post-response suggestions, auto-scroll |
 | `ReasoningPanel` | Animated timeline (Framer Motion) of steps with color-coded badges by type, cycle, timestamp, tool metadata. Telemetry strip with steps/tools/time. Progress bar. Desktop: resizable right sidebar. Mobile: Radix Dialog bottom sheet |
 | `AnimatedAIChat` | Auto-resize textarea, Enter to submit, clear history, loading state |
 | `PortfolioView` | Landing page: HeroSection (title + CTA + animated agent flow preview), HowItWorksSection (3 cards + pipeline strip), StackSection (stack table + GitHub card), PageFooter |
-| `useAgent` | Core hook: fetch config, SSE streaming, session persistence, mock fallback, state machine (checking → online/mock/error) |
+| `useAgent` | Core hook: fetch config, SSE streaming, post-answer suggestions fetch, session persistence, mock fallback, state machine (checking → online/mock/error) |
 
 ## API Endpoints
 
@@ -158,7 +176,8 @@ These providers may have their own quotas, terms, and limits. For absolute zero 
 | `/run` | POST | Backward-compatible alias for `/agent/invoke` |
 | `/run` | GET | Streaming via query param `?query=...&stream=true` |
 | `/health` | GET | Status + list of available tools |
-| `/config` | GET | Active model, fallbacks, tools. Used by the frontend on boot |
+| `/config` | GET | Active model (the responder's preferred provider), fallbacks, tools. Used by the frontend on boot |
+| `/suggestions` | POST | Conversation-aware follow-up prompts. Accepts `history[]`, `tools_used[]`; returns `suggestions[]`. Rate-limit exempt |
 | `/trace/{run_id}` | GET | Returns the stored `AgentResponse` for a previous run lookup |
 
 All endpoints are duplicated with an `/api/` prefix for Vercel routing compatibility.
@@ -179,8 +198,10 @@ python -m venv .venv && source .venv/bin/activate  # Linux/macOS
 # .venv\Scripts\Activate.ps1  # Windows PowerShell
 pip install -r requirements.txt
 cp .env.example .env  # fill in your keys
-python main.py
+python -m uvicorn api:app --reload --port 8000
 ```
+
+`python main.py` is not the server — it runs scripted ReAct examples with a fake LLM (no API keys required), useful for inspecting the graph flow.
 
 ### Frontend
 
@@ -214,12 +235,7 @@ cd backend && python -m unittest discover -s tests -v
 
 # Frontend lint + build
 cd frontend && npm run lint && npm run build
-
-# Secret scan (before publishing)
-.\scripts\check-secrets.ps1
 ```
-
-The secret scan ignores `.env`, `node_modules`, and `dist`, then checks source, docs, and config for common provider token patterns.
 
 ## Problem
 
@@ -282,6 +298,10 @@ GEMINI_API_KEY=
 GROQ_API_KEY=
 GITHUB_MODELS_TOKEN=
 GITHUB_MODELS_MODEL=
+
+# Optional per-role provider preference (defaults shown; each still falls back)
+RESPONDER_PROVIDER=gemini   # provider the agent prefers for answers
+SUGGESTER_PROVIDER=groq     # provider the suggester prefers for prompt suggestions
 
 # Web search (optional but recommended)
 TAVILY_API_KEY=

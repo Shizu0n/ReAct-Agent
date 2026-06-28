@@ -27,6 +27,7 @@
     { "source": "/run", "destination": "/api/index.py" },
     { "source": "/health", "destination": "/api/index.py" },
     { "source": "/config", "destination": "/api/index.py" },
+    { "source": "/suggestions", "destination": "/api/index.py" },
     { "source": "/trace/:path*", "destination": "/api/index.py" },
     {
       "source": "/:path((?!assets/|.*\\..*).*)",

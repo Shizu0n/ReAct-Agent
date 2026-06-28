@@ -12,8 +12,9 @@ from agent.llms import (
     FreeModelFallback,
     UsageTracker,
     UsageTrackingLLM,
-    configured_free_providers,
     load_model_environment,
+    providers_preferring,
+    responder_provider,
 )
 from agent.prompts import SYSTEM_PROMPT
 from agent.state import AgentState, MaxIterationsError, Step
@@ -275,7 +276,7 @@ def _forced_web_search_message(query: str, messages: list[BaseMessage]) -> AIMes
 
 def _create_default_llm() -> Any:
     load_model_environment()
-    return FreeModelFallback(configured_free_providers())
+    return FreeModelFallback(providers_preferring(responder_provider()))
 
 
 def agent_node(state: AgentState, llm: Any) -> dict[str, Any]:

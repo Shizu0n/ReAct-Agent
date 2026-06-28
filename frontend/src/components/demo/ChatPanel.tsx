@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { ArrowUp, CircuitBoard, Lightbulb, Wrench } from 'lucide-react'
 import clsx from 'clsx'
-import type { AgentState, Message, Step } from '../../types'
+import type { AgentState, Message } from '../../types'
 import { ProjectMark } from '../ProjectMark'
 import { MessageMarkdown } from './MessageMarkdown'
 import { AnimatedAIChat } from '../ui/animated-ai-chat'
@@ -24,7 +24,7 @@ type ChatPanelProps = {
 
 export function ChatPanel({ query, setQuery, state, loadingLabel, onSubmit, onClearHistory }: ChatPanelProps) {
   const scrollerRef = useRef<HTMLDivElement | null>(null)
-  const liveSuggestions = contextualSuggestions(state)
+  const liveSuggestions = state.suggestions
   const canClearHistory = state.messages.length > 0 || state.steps.length > 0 || state.runSummary !== null
   const hasConversation = state.messages.length > 0 || state.steps.length > 0 || state.isLoading
 
@@ -58,7 +58,7 @@ export function ChatPanel({ query, setQuery, state, loadingLabel, onSubmit, onCl
         {state.isLoading ? <ReasoningBubble label={loadingLabel} /> : null}
       </div>
 
-      {state.messages.length > 0 && !state.isLoading ? (
+      {state.messages.length > 0 && !state.isLoading && liveSuggestions.length > 0 ? (
         <PromptSuggestions suggestions={liveSuggestions} onSubmit={onSubmit} />
       ) : null}
       <PromptInput
@@ -344,67 +344,3 @@ function connectionStatusLabel(status: AgentState['connectionStatus']): string {
   return labels[status]
 }
 
-function contextualSuggestions(state: AgentState): string[] {
-  const userMessages = state.messages.filter((message) => message.role === 'user')
-  const assistantMessages = state.messages.filter((message) => message.role === 'assistant')
-  const lastUser = userMessages.at(-1)?.content ?? ''
-  const lastAssistant = assistantMessages.at(-1)?.content ?? ''
-  const contextText = `${lastUser} ${lastAssistant}`.toLowerCase()
-  const tools = toolsFromState(state)
-  const suggestions: string[] = []
-
-  if (state.error || state.connectionStatus === 'error' || state.runSummary?.status === 'error') {
-    suggestions.push('Diagnose the failed run and suggest the next concrete fix')
-  }
-
-  if (tools.has('web_search')) {
-    suggestions.push('List the sources used and what each one contributed')
-    suggestions.push('Extract the strongest source-backed claim from the last answer')
-  } else if (/\b(search|source|sources|cite|citation|langgraph|documentation)\b/.test(contextText)) {
-    suggestions.push('Search the web for sources that verify the last answer')
-    suggestions.push('Check the last answer against current public documentation')
-  } else if (/\b(latest|current|release)\b/.test(contextText)) {
-    suggestions.push('Search the web to verify the current fact before answering')
-  }
-
-  if (tools.has('calculator') || /\b(calculate|sqrt|math|formula|equation)\b|\d/.test(lastUser.toLowerCase())) {
-    suggestions.push('Verify the calculation and show the shortest path to the result')
-  }
-
-  if (tools.has('python_executor') || /\b(python|code|script|function|runtime|version)\b/.test(contextText)) {
-    suggestions.push('Turn this into a small Python check I can run locally')
-  }
-
-  if (/\b(why|how|explain|reason|steps|trace)\b/.test(contextText) || state.steps.length > 0) {
-    suggestions.push('Summarize the reasoning trace as a concise checklist')
-  }
-
-  suggestions.push(
-    'Probe the weakest assumption in the last answer',
-    'Turn the answer into a recruiter-facing project note',
-    'Ask one follow-up that would prove the agent really understood the task',
-  )
-
-  return uniqueStrings(suggestions).slice(0, 3)
-}
-
-function toolsFromState(state: AgentState): Set<string> {
-  const tools = new Set<string>()
-
-  state.runSummary?.tools_used.forEach((tool) => tools.add(tool))
-  state.steps.forEach((step) => {
-    toolNamesFromStep(step).forEach((tool) => tools.add(tool))
-  })
-
-  return tools
-}
-
-function toolNamesFromStep(step: Step): string[] {
-  return [step.tool, step.action, ...(step.tools_used ?? [])].filter(
-    (tool): tool is string => typeof tool === 'string' && tool.length > 0,
-  )
-}
-
-function uniqueStrings(values: string[]): string[] {
-  return [...new Set(values)]
-}

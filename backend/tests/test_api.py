@@ -135,6 +135,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["status"], "configured")
+        # The responder prefers Gemini, so /config surfaces it as the active model.
         self.assertEqual(body["active_model"]["provider"], "gemini")
         self.assertEqual(body["active_model"]["model"], "gemini-2.5-flash")
         self.assertEqual(body["active_model"]["label"], "Gemini 2.5 Flash")

@@ -21,12 +21,21 @@ type PersistedAgentSession = Pick<AgentState, 'messages' | 'steps' | 'runSummary
 
 const sessionStorageKey = 'react-agent:chat-session:v1'
 
+// Generic client-side fallback when the suggestions endpoint is unreachable.
+// The backend owns the richer fallback; this only covers a network failure.
+const fallbackSuggestions = [
+  'Probe the weakest assumption in the last answer',
+  'Ask for the evidence or sources behind that answer',
+  'Request one concrete next step based on this answer',
+]
+
 const initialState: AgentState = {
   ...readPersistedSession(),
   isLoading: false,
   error: null,
   config: null,
   connectionStatus: 'checking',
+  suggestions: [],
 }
 
 const mockSteps: Array<Omit<Step, 'timestamp'>> = [
@@ -278,6 +287,30 @@ function historyForApi(messages: Message[]): ApiHistoryMessage[] {
     }))
 }
 
+async function fetchSuggestions(
+  messages: Message[],
+  toolsUsed: string[],
+): Promise<string[]> {
+  try {
+    const response = await fetch(`${apiBaseUrl()}/suggestions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ history: historyForApi(messages), tools_used: toolsUsed }),
+    })
+    if (!response.ok) return fallbackSuggestions
+
+    const data = (await response.json()) as { suggestions?: unknown }
+    const list = Array.isArray(data.suggestions)
+      ? data.suggestions.filter(
+          (item): item is string => typeof item === 'string' && item.trim().length > 0,
+        )
+      : []
+    return list.length > 0 ? list.slice(0, 3) : fallbackSuggestions
+  } catch {
+    return fallbackSuggestions
+  }
+}
+
 function makeUserMessage(query: string): Message {
   return {
     id: crypto.randomUUID(),
@@ -382,6 +415,28 @@ export function useAgent() {
       cancelled = true
     }
   }, [])
+
+  // After a run completes, ask the suggester (Gemini-preferred) for
+  // conversation-aware follow-ups. Non-blocking: the answer is already rendered.
+  useEffect(() => {
+    if (shouldUseMockFallback()) return undefined
+    const summary = state.runSummary
+    if (state.isLoading || summary === null || summary.status !== 'success') {
+      return undefined
+    }
+
+    let cancelled = false
+    void (async () => {
+      const result = await fetchSuggestions(state.messages, summary.tools_used)
+      if (!cancelled) {
+        setState((current) => ({ ...current, suggestions: result }))
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [state.isLoading, state.runSummary, state.messages])
 
   function updateAssistantMessage(assistantId: string, content: string): void {
     setState((current) => ({
@@ -564,6 +619,7 @@ export function useAgent() {
       isLoading: true,
       error: null,
       runSummary: null,
+      suggestions: [],
     }))
 
     void runApi(trimmedQuery, assistantId, state.messages)
@@ -578,6 +634,7 @@ export function useAgent() {
       steps: [],
       error: null,
       runSummary: null,
+      suggestions: [],
     }))
   }
 

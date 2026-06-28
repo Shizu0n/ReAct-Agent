@@ -21,9 +21,10 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from agent.graph import TOOLS, build_graph
-from agent.llms import UsageTracker, configured_model_info
+from agent.llms import UsageTracker, configured_model_info, responder_provider
 from agent.redaction import configure_secure_logging
 from agent.state import MaxIterationsError
+from agent.suggestions import generate_suggestions
 
 configure_secure_logging()
 logger = logging.getLogger("react_agent.api")
@@ -65,6 +66,15 @@ class AgentConfigResponse(BaseModel):
     active_model: ModelInfoResponse | None
     fallback_models: list[ModelInfoResponse]
     tools: list[str]
+
+
+class SuggestionsRequest(BaseModel):
+    history: list[ChatMessageRequest] = Field(default_factory=list)
+    tools_used: list[str] = Field(default_factory=list)
+
+
+class SuggestionsResponse(BaseModel):
+    suggestions: list[str]
 
 
 RUNS: dict[str, AgentResponse] = {}
@@ -374,13 +384,31 @@ async def health() -> dict[str, object]:
 @app.get("/config", response_model=AgentConfigResponse)
 @app.get("/api/config", response_model=AgentConfigResponse)
 async def config() -> AgentConfigResponse:
-    models = [ModelInfoResponse(**model.__dict__) for model in configured_model_info()]
+    models = [
+        ModelInfoResponse(**model.__dict__)
+        for model in configured_model_info(responder_provider())
+    ]
     return AgentConfigResponse(
         status="configured" if models else "unconfigured",
         active_model=models[0] if models else None,
         fallback_models=models[1:],
         tools=list(TOOLS.keys()),
     )
+
+
+@limiter.exempt
+@app.post("/suggestions", response_model=SuggestionsResponse)
+@app.post("/api/suggestions", response_model=SuggestionsResponse)
+async def suggestions(request: Request, payload: SuggestionsRequest) -> SuggestionsResponse:
+    """Generate conversation-aware follow-up prompts via the suggester LLM.
+    Exempt from the rate limit: a turn already spends one call on /run, and the
+    suggester degrades to a static fallback rather than failing."""
+    history = [
+        {"role": message.role, "content": message.content}
+        for message in payload.history
+    ]
+    result = generate_suggestions(history, list(TOOLS.keys()), payload.tools_used)
+    return SuggestionsResponse(suggestions=result)
 
 
 @app.get("/evals")

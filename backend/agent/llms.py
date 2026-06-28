@@ -71,7 +71,7 @@ def _model_label(provider_label: str, model: str) -> str:
     return f"{provider_label} {model}"
 
 
-def configured_model_info() -> list[ModelInfo]:
+def configured_model_info(preferred: str | None = None) -> list[ModelInfo]:
     load_model_environment()
 
     models: list[ModelInfo] = []
@@ -93,6 +93,11 @@ def configured_model_info() -> list[ModelInfo]:
                 _model_label("GitHub Models", model),
             )
         )
+    # When a role preference is given (e.g. the responder), surface that provider
+    # as the active model so /config reflects who actually answers, not just the
+    # configuration order.
+    if preferred:
+        models.sort(key=lambda info: info.provider != preferred)
     return models
 
 
@@ -372,6 +377,24 @@ def configured_free_providers() -> list[FreeProvider]:
     if os.getenv("GITHUB_MODELS_TOKEN") and os.getenv("GITHUB_MODELS_MODEL"):
         providers.append(FreeProvider("github_models", _github_models_provider()))
     return providers
+
+
+def providers_preferring(preferred: str) -> list[FreeProvider]:
+    """Return the configured providers with `preferred` moved to the front, the
+    rest keeping their order. Lets a role (responder, suggester) prefer one
+    provider while still falling back to any other available one — so a setup
+    with a single provider key keeps working."""
+    providers = configured_free_providers()
+    providers.sort(key=lambda provider: provider.name != preferred)
+    return providers
+
+
+DEFAULT_RESPONDER_PROVIDER = "gemini"
+
+
+def responder_provider() -> str:
+    """Provider the agent prefers for generating answers (env-overridable)."""
+    return os.getenv("RESPONDER_PROVIDER", DEFAULT_RESPONDER_PROVIDER)
 
 
 # Approximate public list prices (USD per 1M tokens) for the underlying models,

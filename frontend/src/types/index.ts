@@ -75,6 +75,7 @@ export interface AgentState {
   config: AgentConfig | null
   runSummary: RunSummary | null
   connectionStatus: 'checking' | 'online' | 'mock' | 'error'
+  suggestions: string[]
 }
 
 export interface ModelInfo {

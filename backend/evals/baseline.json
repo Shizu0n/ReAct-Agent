@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-20T13:07:39.556960+00:00",
+  "generated_at": "2026-06-28T20:57:48.610990+00:00",
   "model": {
     "provider": "Gemini",
     "label": "Gemini 2.5 Flash"
@@ -44,154 +44,154 @@
       "category": "math",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 4259
+      "latency_ms": 3382
     },
     {
       "id": "math-002",
       "category": "math",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 2524
+      "latency_ms": 2009
     },
     {
       "id": "math-003",
       "category": "math",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 2911
+      "latency_ms": 1979
     },
     {
       "id": "math-004",
       "category": "math",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 3968
+      "latency_ms": 3159
     },
     {
       "id": "math-005",
       "category": "math",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 3337
+      "latency_ms": 2600
     },
     {
       "id": "math-006",
       "category": "math",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 3278
+      "latency_ms": 2509
     },
     {
       "id": "code-001",
       "category": "code",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 9268
+      "latency_ms": 4253
     },
     {
       "id": "code-002",
       "category": "code",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 4072
+      "latency_ms": 3436
     },
     {
       "id": "code-003",
       "category": "code",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 3461
+      "latency_ms": 3508
     },
     {
       "id": "code-004",
       "category": "code",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 3726
+      "latency_ms": 3448
     },
     {
       "id": "code-005",
       "category": "code",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 5244
+      "latency_ms": 3306
     },
     {
       "id": "code-006",
       "category": "code",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 4022
+      "latency_ms": 3264
     },
     {
       "id": "web-001",
       "category": "web",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 4663
+      "latency_ms": 4345
     },
     {
       "id": "web-002",
       "category": "web",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 4680
+      "latency_ms": 2536
     },
     {
       "id": "web-003",
       "category": "web",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 3962
+      "latency_ms": 3277
     },
     {
       "id": "direct-001",
       "category": "direct",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 1380
+      "latency_ms": 1075
     },
     {
       "id": "direct-002",
       "category": "direct",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 2380
+      "latency_ms": 1128
     },
     {
       "id": "direct-003",
       "category": "direct",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 1360
+      "latency_ms": 2782
     },
     {
       "id": "direct-004",
       "category": "direct",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 1682
+      "latency_ms": 3744
     },
     {
       "id": "direct-005",
       "category": "direct",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 1943
+      "latency_ms": 9101
     },
     {
       "id": "edge-001",
       "category": "edge",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 5662
+      "latency_ms": 3500
     },
     {
       "id": "edge-002",
       "category": "edge",
       "answer_pass": true,
       "tool_pass": true,
-      "latency_ms": 3828
+      "latency_ms": 2594
     }
   ]
 }
