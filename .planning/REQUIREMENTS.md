@@ -14,7 +14,7 @@ Requirements for this milestone. Grouped by pillar; build order is strictly sequ
 - [ ] **FOUND-02**: A shared DB connection layer uses the Transaction Pooler (port 6543, prepared statements disabled) for queries and the direct connection (port 5432) for migrations only
 - [ ] **FOUND-03**: A schema migration creates the `documents`, `document_chunks`, `traces`, and `keepalive` tables plus an HNSW vector index
 - [ ] **FOUND-04**: A scheduled keep-alive (Vercel cron) writes to the database at least every 5 days so the free-tier project never hits the 7-day inactivity pause
-- [ ] **FOUND-05**: LangGraph is upgraded to a version compatible with `langgraph-checkpoint-postgres` and `langchain-mcp-adapters`, and the existing unit tests still pass
+- [x] **FOUND-05**: LangGraph is upgraded to a version compatible with `langgraph-checkpoint-postgres` and `langchain-mcp-adapters`, and the existing unit tests still pass
 
 ### Memory (MEM)
 
@@ -112,7 +112,7 @@ Which phases cover which requirements.
 | FOUND-02 | Phase 1 | Pending |
 | FOUND-03 | Phase 1 | Pending |
 | FOUND-04 | Phase 1 | Pending |
-| FOUND-05 | Phase 1 | Pending |
+| FOUND-05 | Phase 1 | Complete |
 | MEM-01 | Phase 2 | Pending |
 | MEM-02 | Phase 2 | Pending |
 | MEM-03 | Phase 2 | Pending |
@@ -142,6 +142,7 @@ Which phases cover which requirements.
 | MCP-05 | Phase 5 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 32 total
 - Mapped to phases: 32 ✓
 - Unmapped: 0 ✓

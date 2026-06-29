@@ -7,7 +7,7 @@ from typing import Any
 
 
 REDACTION = "[redacted]"
-SECRET_ENV_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
+SECRET_ENV_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "SUPABASE")
 SECRET_QUERY_PARAMS = ("key", "api_key", "token", "access_token")
 
 _BASE_LOG_RECORD_FACTORY = logging.getLogRecordFactory()

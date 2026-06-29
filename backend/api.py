@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from collections import deque
@@ -10,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -379,6 +380,29 @@ async def stream_agent(query: str, stream: bool = True):
 @app.get("/api/health")
 async def health() -> dict[str, object]:
     return {"status": "ok", "tools": list(TOOLS.keys())}
+
+
+@app.get("/keepalive")
+@app.get("/api/keepalive")
+async def keepalive_handler(request: Request):
+    cron_secret = os.getenv("CRON_SECRET", "")
+    auth = request.headers.get("authorization", "")
+    if cron_secret and auth != f"Bearer {cron_secret}":
+        return Response(status_code=401)
+
+    from agent.db import pooler_connection
+
+    now = datetime.now(timezone.utc)
+    try:
+        async with pooler_connection() as conn:
+            await conn.execute(
+                "UPDATE keepalive SET pinged_at = %s WHERE id = 1",
+                (now,),
+            )
+    except Exception:
+        logger.exception("keepalive DB write failed")
+        return Response(status_code=500)
+    return {"status": "ok", "pinged_at": now.isoformat()}
 
 
 @app.get("/config", response_model=AgentConfigResponse)

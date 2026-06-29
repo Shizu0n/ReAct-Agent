@@ -1,6 +1,9 @@
 {
   "buildCommand": "cd frontend && npm install && npm run build",
   "outputDirectory": "frontend/dist",
+  "crons": [
+    { "path": "/api/keepalive", "schedule": "0 0 * * *" }
+  ],
   "headers": [
     {
       "source": "/",
@@ -29,6 +32,7 @@
     { "source": "/config", "destination": "/api/index.py" },
     { "source": "/suggestions", "destination": "/api/index.py" },
     { "source": "/trace/:path*", "destination": "/api/index.py" },
+    { "source": "/keepalive", "destination": "/api/index.py" },
     {
       "source": "/:path((?!assets/|.*\\..*).*)",
       "destination": "/index.html"

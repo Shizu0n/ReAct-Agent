@@ -30,6 +30,20 @@ class SecretRedactionTests(unittest.TestCase):
         self.assertIn("key=[redacted]", output)
         self.assertIn("Bearer [redacted]", output)
 
+    def test_redact_secrets_scrubs_supabase_connection_string(self):
+        from agent.redaction import redact_secrets
+
+        fake_url = (
+            "postgresql://postgres.abcdefghij:s3cr3tP4ssw0rd@"
+            "aws-0-us-east-1.pooler.supabase.com:6543/postgres"
+        )
+        with patch.dict(os.environ, {"SUPABASE_POOLER_URL": fake_url}, clear=True):
+            redacted = redact_secrets(f"connecting to {fake_url} now")
+
+        self.assertNotIn(fake_url, redacted)
+        self.assertNotIn("s3cr3tP4ssw0rd", redacted)
+        self.assertIn("[redacted]", redacted)
+
     def test_secure_logging_quiets_noisy_access_loggers(self):
         from agent.redaction import configure_secure_logging
 

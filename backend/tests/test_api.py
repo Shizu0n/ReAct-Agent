@@ -96,6 +96,25 @@ class FakeGraphWithSpy(FakeGraph):
             return graph.invoke(initial_state)
 
 
+class _FakeKeepaliveConn:
+    def __init__(self):
+        self.executed = []
+
+    async def execute(self, query, params=None):
+        self.executed.append((query, params))
+
+
+class _FakeKeepalivePooler:
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, *exc):
+        return False
+
+
 class ApiTests(unittest.TestCase):
     def setUp(self):
         import api
@@ -119,6 +138,42 @@ class ApiTests(unittest.TestCase):
             response.json(),
             {"status": "ok", "tools": ["web_search", "python_executor", "calculator"]},
         )
+
+    def test_keepalive_valid_token_updates(self):
+        conn = _FakeKeepaliveConn()
+        with patch.dict(os.environ, {"CRON_SECRET": "test-secret"}), patch(
+            "agent.db.pooler_connection", lambda: _FakeKeepalivePooler(conn)
+        ):
+            response = self.client.get(
+                "/keepalive", headers={"Authorization": "Bearer test-secret"}
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")
+        self.assertEqual(len(conn.executed), 1)
+        self.assertIn("UPDATE keepalive", conn.executed[0][0])
+
+    def test_keepalive_wrong_token_returns_401_without_write(self):
+        conn = _FakeKeepaliveConn()
+        with patch.dict(os.environ, {"CRON_SECRET": "test-secret"}), patch(
+            "agent.db.pooler_connection", lambda: _FakeKeepalivePooler(conn)
+        ):
+            response = self.client.get(
+                "/keepalive", headers={"Authorization": "Bearer wrong"}
+            )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(conn.executed, [])
+
+    def test_keepalive_missing_token_returns_401(self):
+        conn = _FakeKeepaliveConn()
+        with patch.dict(os.environ, {"CRON_SECRET": "test-secret"}), patch(
+            "agent.db.pooler_connection", lambda: _FakeKeepalivePooler(conn)
+        ):
+            response = self.client.get("/api/keepalive")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(conn.executed, [])
 
     def test_config_reports_model_chain_without_secrets(self):
         with patch.dict(

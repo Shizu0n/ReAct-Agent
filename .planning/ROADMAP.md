@@ -32,22 +32,22 @@ reliability thinking, which is the core recruiter-facing signal.
   3. The Vercel cron job writes a fresh timestamp to the `keepalive` table at least every 5 days, preventing the free-tier 7-day inactivity pause
   4. All existing backend unit tests pass on the upgraded LangGraph version (>=0.3) with no regressions
 
-**Plans**: 4 plans (Walking Skeleton, strictly sequential — one per success criterion)
+**Plans**: 3/4 plans executed (01-04 code + tests complete; deployed round-trip pending)
 **Wave 1**
 
-- [ ] 01-01-PLAN.md — LangGraph ecosystem upgrade + regression gate (FOUND-05, SC4)
+- [x] 01-01-PLAN.md — LangGraph ecosystem upgrade + regression gate (FOUND-05, SC4)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 01-02-PLAN.md — Supabase provisioning + pooler connection layer + redaction fix + live query smoke (FOUND-01, FOUND-02, SC1)
+- [x] 01-02-PLAN.md — Supabase provisioning + pooler connection layer + redaction fix + live query smoke (FOUND-01, FOUND-02, SC1)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 01-03-PLAN.md — Schema migration authored + applied to live Supabase + verified (FOUND-01, FOUND-03, SC2)
+- [x] 01-03-PLAN.md — Schema migration authored + applied to live Supabase + verified (FOUND-01, FOUND-03, SC2)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 01-04-PLAN.md — Keep-alive cron endpoint + Vercel cron + CRON_SECRET auth + deployed round-trip (FOUND-04, SC3)
+- [ ] 01-04-PLAN.md — Keep-alive cron endpoint + Vercel cron + CRON_SECRET auth + deployed round-trip (FOUND-04, SC3) *(code + tests done; deployed round-trip pending)*
 
 ### Phase 2: Memory
 
@@ -118,7 +118,7 @@ reliability thinking, which is the core recruiter-facing signal.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 0/? | Not started | - |
+| 1. Foundation | 3/4 | In Progress |  |
 | 2. Memory | 0/? | Not started | - |
 | 3. RAG | 0/? | Not started | - |
 | 4. Observability | 0/? | Not started | - |
