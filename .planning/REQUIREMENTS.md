@@ -104,17 +104,50 @@ Explicitly excluded. Documented to prevent scope creep.
 
 ## Traceability
 
-Which phases cover which requirements. Populated during roadmap creation.
+Which phases cover which requirements.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (to be filled by roadmap) | — | Pending |
+| FOUND-01 | Phase 1 | Pending |
+| FOUND-02 | Phase 1 | Pending |
+| FOUND-03 | Phase 1 | Pending |
+| FOUND-04 | Phase 1 | Pending |
+| FOUND-05 | Phase 1 | Pending |
+| MEM-01 | Phase 2 | Pending |
+| MEM-02 | Phase 2 | Pending |
+| MEM-03 | Phase 2 | Pending |
+| MEM-04 | Phase 2 | Pending |
+| MEM-05 | Phase 2 | Pending |
+| MEM-06 | Phase 2 | Pending |
+| MEM-07 | Phase 2 | Pending |
+| RAG-01 | Phase 3 | Pending |
+| RAG-02 | Phase 3 | Pending |
+| RAG-03 | Phase 3 | Pending |
+| RAG-04 | Phase 3 | Pending |
+| RAG-05 | Phase 3 | Pending |
+| RAG-06 | Phase 3 | Pending |
+| RAG-07 | Phase 3 | Pending |
+| RAG-08 | Phase 3 | Pending |
+| RAG-09 | Phase 3 | Pending |
+| OBS-01 | Phase 4 | Pending |
+| OBS-02 | Phase 4 | Pending |
+| OBS-03 | Phase 4 | Pending |
+| OBS-04 | Phase 4 | Pending |
+| OBS-05 | Phase 4 | Pending |
+| OBS-06 | Phase 4 | Pending |
+| MCP-01 | Phase 5 | Pending |
+| MCP-02 | Phase 5 | Pending |
+| MCP-03 | Phase 5 | Pending |
+| MCP-04 | Phase 5 | Pending |
+| MCP-05 | Phase 5 | Pending |
 
 **Coverage:**
-- v1 requirements: 31 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 31 ⚠️
+- v1 requirements: 32 total
+- Mapped to phases: 32 ✓
+- Unmapped: 0 ✓
+
+Note: The file previously stated 31 total; a recount yields 32 (FOUND×5, MEM×7, RAG×9, OBS×6, MCP×5). All are mapped.
 
 ---
 *Requirements defined: 2026-06-28*
-*Last updated: 2026-06-28 after initial definition*
+*Last updated: 2026-06-28 after roadmap creation — traceability populated*
