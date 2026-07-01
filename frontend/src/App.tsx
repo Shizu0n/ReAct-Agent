@@ -65,7 +65,7 @@ function writeShellState(patch: Partial<PersistedShellState>): void {
 }
 
 function App() {
-  const { state, sendQuery, clearHistory } = useAgent()
+  const { state, sendQuery, clearHistory, sessionId } = useAgent()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarHidden, setSidebarHidden] = useState(() => readShellState().sidebarHidden)
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(LEFT_SIDEBAR_DEFAULT)
@@ -215,6 +215,7 @@ function App() {
             state={state}
             sendQuery={sendQuery}
             clearHistory={clearHistory}
+            sessionId={sessionId}
             sidebarHidden={sidebarHidden}
             traceOpen={traceOpen}
             rightSidebarWidth={rightSidebarWidth}

@@ -4,9 +4,12 @@ import os
 import re
 from datetime import datetime, timezone
 from typing import Any, cast
+from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
+from langgraph.store.base import BaseStore
 
 from agent.llms import (
     FreeModelFallback,
@@ -29,6 +32,10 @@ MAX_ITERATIONS = 10
 WEB_SEARCH_TOOL_NAME = cast(Any, web_search).name
 PYTHON_EXECUTOR_TOOL_NAME = cast(Any, python_executor).name
 CALCULATOR_TOOL_NAME = cast(Any, calculator).name
+MEMORY_READ_TOOL_NAME = "memory_read"
+MEMORY_WRITE_TOOL_NAME = "memory_write"
+MEMORY_NAMESPACE_PREFIX = "memories"
+MAX_MEMORIES_STORED = int(os.getenv("MEMORY_MAX_STORED", "20"))
 TOOLS = {
     WEB_SEARCH_TOOL_NAME: web_search,
     PYTHON_EXECUTOR_TOOL_NAME: python_executor,
@@ -38,6 +45,8 @@ TOOL_INPUT_KEYS = {
     WEB_SEARCH_TOOL_NAME: "query",
     PYTHON_EXECUTOR_TOOL_NAME: "code",
     CALCULATOR_TOOL_NAME: "expression",
+    MEMORY_READ_TOOL_NAME: "query",
+    MEMORY_WRITE_TOOL_NAME: "content",
 }
 
 # OpenAI-style tool schemas. The descriptions are deliberately directive: tool
@@ -109,6 +118,49 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": MEMORY_READ_TOOL_NAME,
+            "description": (
+                "Read facts the user has shared in previous sessions. Call this at "
+                "the start of any conversation where the user refers to a past "
+                "interaction or where you want to personalize your response. Returns "
+                "stored facts ordered by recency."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Brief description of what to recall.",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": MEMORY_WRITE_TOOL_NAME,
+            "description": (
+                "Store a fact the user has shared for recall in future sessions. "
+                "Call this when the user shares a durable personal fact, preference, "
+                "or goal. Store one discrete fact per call."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "The fact to remember, written as a brief statement.",
+                    }
+                },
+                "required": ["content"],
             },
         },
     },
@@ -322,6 +374,34 @@ def agent_node(state: AgentState, llm: Any) -> dict[str, Any]:
     return {"messages": [final], "final_answer": answer}
 
 
+async def _run_memory_read(store: BaseStore, session_id: str, query: str) -> str:
+    namespace = (MEMORY_NAMESPACE_PREFIX, session_id)
+    items = await store.asearch(namespace, limit=MAX_MEMORIES_STORED)
+    if not items:
+        return "No memories found for this session."
+    facts = [item.value.get("text", "") for item in items if item.value.get("text")]
+    if not facts:
+        return "No memories found for this session."
+    return (
+        "--- BEGIN USER MEMORIES ---\n"
+        + "\n".join(f"- {f}" for f in facts)
+        + "\n--- END USER MEMORIES ---"
+    )
+
+
+async def _run_memory_write(store: BaseStore, session_id: str, content: str) -> str:
+    if not content or not content.strip():
+        return "Memory not stored: empty content."
+    namespace = (MEMORY_NAMESPACE_PREFIX, session_id)
+    existing = await store.asearch(namespace, limit=MAX_MEMORIES_STORED + 1)
+    if len(existing) >= MAX_MEMORIES_STORED:
+        oldest = existing[-1]
+        await store.adelete(namespace, oldest.key)
+    key = str(uuid4())
+    await store.aput(namespace, key, {"text": content})
+    return f"Stored: {content}"
+
+
 def _run_tool(action: str, action_input: str) -> str:
     tool = TOOLS.get(action)
     if tool is None:
@@ -340,18 +420,30 @@ def _normalize_tool_input(action: str, action_input: str) -> str:
     return action_input
 
 
-def tool_node(state: AgentState) -> dict[str, Any]:
+async def tool_node(state: AgentState, store: BaseStore, config: RunnableConfig) -> dict[str, Any]:
     messages = state.get("messages", [])
     last_ai = _last_ai_message(messages)
     tool_calls = list(last_ai.tool_calls) if last_ai and last_ai.tool_calls else []
 
     thought = str(last_ai.content) if last_ai else ""
+    session_id = config.get("configurable", {}).get("thread_id", "")
     new_messages: list[BaseMessage] = []
     new_steps: list[Step] = []
     for call in tool_calls:
         action = call.get("name", "")
         action_input = _normalize_tool_input(action, _tool_call_action_input(call))
-        observation = _run_tool(action, action_input)
+        if action == MEMORY_READ_TOOL_NAME:
+            if store is None:
+                observation = "Memory is unavailable in this session."
+            else:
+                observation = await _run_memory_read(store, session_id, action_input)
+        elif action == MEMORY_WRITE_TOOL_NAME:
+            if store is None:
+                observation = "Memory is unavailable in this session."
+            else:
+                observation = await _run_memory_write(store, session_id, action_input)
+        else:
+            observation = _run_tool(action, action_input)
         new_messages.append(
             ToolMessage(content=observation, tool_call_id=call.get("id", action))
         )
@@ -383,7 +475,7 @@ def should_continue(state: AgentState) -> str:
     return "tools" if last_ai and last_ai.tool_calls else "end"
 
 
-def build_graph(llm: Any | None = None, tracker: UsageTracker | None = None):
+def build_graph(llm: Any | None = None, tracker: UsageTracker | None = None, checkpointer=None, store=None):
     active_llm = llm or _create_default_llm()
     if tracker is not None:
         active_llm = UsageTrackingLLM(active_llm, tracker)
@@ -397,4 +489,4 @@ def build_graph(llm: Any | None = None, tracker: UsageTracker | None = None):
         {"tools": "tool_node", "end": END},
     )
     workflow.add_edge("tool_node", "agent_node")
-    return workflow.compile()
+    return workflow.compile(checkpointer=checkpointer, store=store)

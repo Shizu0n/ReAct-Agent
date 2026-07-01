@@ -255,7 +255,7 @@ This project wraps a ReAct loop in LangGraph, exposes it through FastAPI with bo
 
 **Observability:** Every run reports token usage, estimated cost, latency, and the provider that served each call, surfaced on the API response and in the reasoning-trace header. An evaluation harness (`backend/evals/`) scores task success and tool-selection accuracy against a labelled dataset.
 
-**Security:** `python_executor` runs in a subprocess with AST validation, import whitelist, blocked builtins, and a 10s timeout. `redaction.py` scrubs secrets from all log output and error messages. Rate limiting via slowapi caps at 10 req/min/IP.
+**Security:** `python_executor` runs in a subprocess with AST validation, import whitelist, blocked builtins, and a 10s timeout. `redaction.py` scrubs secrets from all log output and error messages. Rate limiting via slowapi caps at 10 req/min/IP. Memory content stored in Supabase via `memory_write` is **not auto-redacted** — the global secret redaction covers logs and error messages, not stored memory values. Per-session memory is capped at `MEMORY_MAX_STORED` entries (default 20) to bound Supabase free-tier storage growth.
 
 ## Metrics
 

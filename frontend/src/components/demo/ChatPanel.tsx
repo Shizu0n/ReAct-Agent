@@ -17,12 +17,13 @@ type ChatPanelProps = {
   query: string
   setQuery: (query: string) => void
   state: AgentState
+  sessionId?: string
   loadingLabel: string
   onSubmit: (query: string) => void
   onClearHistory?: () => void
 }
 
-export function ChatPanel({ query, setQuery, state, loadingLabel, onSubmit, onClearHistory }: ChatPanelProps) {
+export function ChatPanel({ query, setQuery, state, sessionId = '', loadingLabel, onSubmit, onClearHistory }: ChatPanelProps) {
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const liveSuggestions = state.suggestions
   const canClearHistory = state.messages.length > 0 || state.steps.length > 0 || state.runSummary !== null
@@ -42,7 +43,7 @@ export function ChatPanel({ query, setQuery, state, loadingLabel, onSubmit, onCl
 
   return (
     <div className="relative mx-0 flex h-full min-h-0 min-w-0 w-full max-w-[100vw] flex-col overflow-hidden bg-[var(--bg-primary)] lg:mx-auto lg:max-w-[920px]">
-      <StatusStrip state={state} />
+      <StatusStrip state={state} sessionId={sessionId} />
 
       <div
         ref={scrollerRef}
@@ -73,7 +74,7 @@ export function ChatPanel({ query, setQuery, state, loadingLabel, onSubmit, onCl
   )
 }
 
-function StatusStrip({ state }: { state: AgentState }) {
+function StatusStrip({ state, sessionId }: { state: AgentState; sessionId?: string }) {
   const activeModel = state.config?.active_model?.label
   const fallbackCount = state.config?.fallback_models.length ?? 0
   const modelLabel = activeModel ?? modelStatusLabel(state.connectionStatus)
@@ -110,6 +111,15 @@ function StatusStrip({ state }: { state: AgentState }) {
             {tool}
           </span>
         ))}
+        {sessionId ? (
+          <span
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2.5 py-1 font-mono"
+            title="Click to copy session ID"
+            onClick={() => navigator.clipboard.writeText(sessionId)}
+          >
+            {sessionId.slice(0, 8)}&hellip;
+          </span>
+        ) : null}
       </div>
     </div>
   )

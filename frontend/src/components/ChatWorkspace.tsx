@@ -13,6 +13,7 @@ type ChatWorkspaceProps = {
   state: AgentState
   sendQuery: (query: string) => void
   clearHistory: () => void
+  sessionId: string
   sidebarHidden: boolean
   traceOpen: boolean
   rightSidebarWidth: number
@@ -28,6 +29,7 @@ export function ChatWorkspace({
   state,
   sendQuery,
   clearHistory,
+  sessionId,
   sidebarHidden,
   traceOpen,
   rightSidebarWidth,
@@ -164,6 +166,7 @@ export function ChatWorkspace({
             query={query}
             setQuery={setQuery}
             state={state}
+            sessionId={sessionId}
             loadingLabel={loadingLabels[loadingIndex]}
             onSubmit={submitQuery}
             onClearHistory={clearHistory}

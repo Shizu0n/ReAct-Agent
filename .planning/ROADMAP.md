@@ -11,8 +11,8 @@ reliability thinking, which is the core recruiter-facing signal.
 
 ## Phases
 
-- [ ] **Phase 1: Foundation** — Supabase persistence backbone, DB schema, keep-alive cron, LangGraph upgrade
-- [ ] **Phase 2: Memory** — Cross-session conversation history and long-term fact recall with visible trace steps
+- [x] **Phase 1: Foundation** — Supabase persistence backbone, DB schema, keep-alive cron, LangGraph upgrade
+- [x] **Phase 2: Memory** — Cross-session conversation history and long-term fact recall with visible trace steps
 - [ ] **Phase 3: RAG** — Document upload, rate-limit-safe ingestion pipeline, pgvector retrieval, cited answers
 - [ ] **Phase 4: Observability** — Persistent trace history, per-step dashboard, provider and fallback display
 - [ ] **Phase 5: MCP** — Companion MCP server, dynamic tool discovery via `tools/list`, env-var toggle
@@ -32,7 +32,7 @@ reliability thinking, which is the core recruiter-facing signal.
   3. The Vercel cron job writes a fresh timestamp to the `keepalive` table at least every 5 days, preventing the free-tier 7-day inactivity pause
   4. All existing backend unit tests pass on the upgraded LangGraph version (>=0.3) with no regressions
 
-**Plans**: 3/4 plans executed (01-04 code + tests complete; deployed round-trip pending)
+**Plans**: 4/4 plans executed (deployed keepalive round-trip verified 2026-06-29)
 **Wave 1**
 
 - [x] 01-01-PLAN.md — LangGraph ecosystem upgrade + regression gate (FOUND-05, SC4)
@@ -47,7 +47,7 @@ reliability thinking, which is the core recruiter-facing signal.
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 01-04-PLAN.md — Keep-alive cron endpoint + Vercel cron + CRON_SECRET auth + deployed round-trip (FOUND-04, SC3) *(code + tests done; deployed round-trip pending)*
+- [x] 01-04-PLAN.md — Keep-alive cron endpoint + Vercel cron + CRON_SECRET auth + deployed round-trip (FOUND-04, SC3)
 
 ### Phase 2: Memory
 
@@ -63,8 +63,21 @@ reliability thinking, which is the core recruiter-facing signal.
   4. The current session ID is visible and copyable in the UI, enabling a recruiter to verify cross-session persistence manually
   5. Clicking "clear memory" in the UI results in the agent having no recollection of prior facts in the next turn
 
-**Plans**: TBD
+**Plans**: 4/4 plans executed (live SC1–SC5 round-trip verified 2026-07-01)
 **UI hint**: yes
+
+**Wave 1**
+
+- [x] 02-01-PLAN.md — Foundation: api/+root requirements sync, AsyncConnectionPool, lifespan checkpointer/store, async invocation, X-Session-Id -> thread_id, [BLOCKING] live schema setup (MEM-01, MEM-02; SC1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 02-02-PLAN.md — Long-term memory as visible tools: memory_read/memory_write in tool_node, recency cap, prompt-injection barrier (MEM-03, MEM-04, MEM-07; SC2, SC3)
+- [x] 02-03-PLAN.md — Session identity + display: localStorage session id, X-Session-Id header, copyable session-id chip (MEM-01, MEM-05; SC1, SC4)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 02-04-PLAN.md — Clear memory: DELETE /memory/{session_id} dual route + UUID validation, vercel rewrite, UI clear wiring, full SC1–SC5 round-trip (MEM-06; SC5)
 
 ### Phase 3: RAG
 
@@ -118,8 +131,8 @@ reliability thinking, which is the core recruiter-facing signal.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 3/4 | In Progress |  |
-| 2. Memory | 0/? | Not started | - |
+| 1. Foundation | 4/4 | ✓ Complete | 2026-06-29 |
+| 2. Memory | 4/4 | ✓ Complete | 2026-07-01 |
 | 3. RAG | 0/? | Not started | - |
 | 4. Observability | 0/? | Not started | - |
 | 5. MCP | 0/? | Not started | - |

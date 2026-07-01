@@ -1,6 +1,7 @@
+import asyncio
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage
@@ -39,6 +40,13 @@ class FakeGraph:
             "final_answer": "42",
         }
 
+    async def ainvoke(self, initial_state, config=None):
+        return self.invoke(initial_state)
+
+    async def astream(self, initial_state, config=None, stream_mode="values"):
+        for state in self.stream(initial_state, stream_mode=stream_mode):
+            yield state
+
 
 class ScriptedLLM:
     def __init__(self, responses):
@@ -63,26 +71,12 @@ class FakeGraphWithSpy(FakeGraph):
         self.invoked_tools = []
         self.web_search = FakeWebSearch()
 
-    def invoke(self, initial_state):
-        query = str(initial_state["messages"][-1].content)
-        if self._should_run_enforcement_graph(query):
-            final_state = self._run_enforcement_graph(initial_state)
-        else:
-            final_state = super().invoke(initial_state)
-
-        self.invoked_tools = [
-            step["action"]
-            for step in final_state.get("intermediate_steps", [])
-            if step.get("action")
-        ]
-        return final_state
-
     def _should_run_enforcement_graph(self, query):
         from agent.graph import _requires_web_search
 
         return _requires_web_search(query)
 
-    def _run_enforcement_graph(self, initial_state):
+    async def _run_enforcement_graph(self, initial_state):
         from agent.graph import TOOLS, build_graph
 
         llm = ScriptedLLM(
@@ -93,7 +87,21 @@ class FakeGraphWithSpy(FakeGraph):
         )
         graph = build_graph(llm=llm)
         with patch.dict(TOOLS, {"web_search": self.web_search}):
-            return graph.invoke(initial_state)
+            return await graph.ainvoke(initial_state)
+
+    async def ainvoke(self, initial_state, config=None):
+        query = str(initial_state["messages"][-1].content)
+        if self._should_run_enforcement_graph(query):
+            final_state = await self._run_enforcement_graph(initial_state)
+        else:
+            final_state = super().invoke(initial_state)
+
+        self.invoked_tools = [
+            step["action"]
+            for step in final_state.get("intermediate_steps", [])
+            if step.get("action")
+        ]
+        return final_state
 
 
 class _FakeKeepaliveConn:
@@ -371,6 +379,128 @@ class ApiTests(unittest.TestCase):
         response = self.client.get("/trace/missing")
 
         self.assertEqual(response.status_code, 404)
+
+
+class MemorySessionTests(unittest.TestCase):
+    def setUp(self):
+        import api
+        self.api = api
+
+    def test_valid_uuid_is_accepted_by_is_valid_session_id(self):
+        valid = "12345678-1234-1234-1234-123456789abc"
+        self.assertTrue(self.api._is_valid_session_id(valid))
+
+    def test_empty_string_is_rejected(self):
+        self.assertFalse(self.api._is_valid_session_id(""))
+
+    def test_non_uuid_string_is_rejected(self):
+        self.assertFalse(self.api._is_valid_session_id("not-a-uuid"))
+        self.assertFalse(self.api._is_valid_session_id("123"))
+        self.assertFalse(self.api._is_valid_session_id("12345678-1234-1234-1234-ZZZZZZZZZZZZ"))
+
+    def test_get_session_id_returns_valid_uuid_header(self):
+        from unittest.mock import MagicMock
+
+        valid_uuid = "12345678-1234-1234-1234-123456789abc"
+        mock_request = MagicMock()
+        mock_request.headers.get.return_value = valid_uuid
+
+        result = self.api._get_session_id(mock_request)
+        self.assertEqual(result, valid_uuid)
+
+    def test_get_session_id_missing_header_returns_fresh_uuid(self):
+        import re
+        from unittest.mock import MagicMock
+
+        mock_request = MagicMock()
+        mock_request.headers.get.return_value = ""
+
+        result = self.api._get_session_id(mock_request)
+        uuid_pattern = re.compile(
+            r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        )
+        self.assertIsNotNone(uuid_pattern.fullmatch(result))
+
+    def test_get_session_id_malformed_header_returns_fresh_uuid(self):
+        import re
+        from unittest.mock import MagicMock
+
+        mock_request = MagicMock()
+        mock_request.headers.get.return_value = "not-a-valid-uuid"
+
+        result = self.api._get_session_id(mock_request)
+        uuid_pattern = re.compile(
+            r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        )
+        self.assertIsNotNone(uuid_pattern.fullmatch(result))
+
+    def test_graph_config_nests_thread_id_under_configurable(self):
+        session_id = "12345678-1234-1234-1234-123456789abc"
+        config = self.api._graph_config(session_id)
+        self.assertEqual(config, {"configurable": {"thread_id": session_id}})
+
+
+class ClearMemoryTests(unittest.TestCase):
+    def setUp(self):
+        import api
+        self.api = api
+
+        self.mock_conn = MagicMock()
+        self.mock_conn.execute = AsyncMock()
+
+        self.mock_pool = MagicMock()
+        self.mock_pool.connection.return_value.__aenter__ = AsyncMock(return_value=self.mock_conn)
+        self.mock_pool.connection.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        self.mock_checkpointer = MagicMock()
+        self.mock_checkpointer.adelete_thread = AsyncMock()
+
+        api.app.state.checkpointer = self.mock_checkpointer
+        api.app.state.pool = self.mock_pool
+        api.app.state.store = None
+
+        self.client = TestClient(api.app)
+
+    def tearDown(self):
+        self.api.app.state.checkpointer = None
+        self.api.app.state.pool = None
+        self.api.app.state.store = None
+        self.client.close()
+
+    def test_valid_uuid_returns_200_and_triggers_db_cleanup(self):
+        session_id = "12345678-1234-1234-1234-123456789abc"
+        response = self.client.delete(f"/api/memory/{session_id}")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "cleared")
+        self.assertEqual(body["session_id"], session_id)
+
+        self.mock_checkpointer.adelete_thread.assert_called_once_with(session_id)
+        self.mock_conn.execute.assert_called_once()
+        sql, params = self.mock_conn.execute.call_args[0]
+        self.assertIn("DELETE FROM store WHERE prefix LIKE", sql)
+        self.assertIn(f"memories.{session_id}", params[0])
+
+    def test_malformed_session_id_returns_400_and_no_db_access(self):
+        response = self.client.delete("/api/memory/not-a-uuid")
+
+        self.assertEqual(response.status_code, 400)
+        self.mock_checkpointer.adelete_thread.assert_not_called()
+        self.mock_conn.execute.assert_not_called()
+
+    def test_bare_route_resolves(self):
+        session_id = "12345678-1234-1234-1234-123456789abc"
+        response = self.client.delete(f"/memory/{session_id}")
+        self.assertEqual(response.status_code, 200)
+
+    def test_degraded_mode_returns_200_without_raising(self):
+        self.api.app.state.checkpointer = None
+        self.api.app.state.pool = None
+        session_id = "12345678-1234-1234-1234-123456789abc"
+        response = self.client.delete(f"/api/memory/{session_id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "cleared")
 
 
 if __name__ == "__main__":

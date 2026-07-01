@@ -1,6 +1,7 @@
+import asyncio
 import unittest
 import os
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -233,14 +234,14 @@ class GraphTests(unittest.TestCase):
         )
         graph = build_graph(llm=llm)
 
-        final_state = graph.invoke(
+        final_state = asyncio.run(graph.ainvoke(
             {
                 "messages": [HumanMessage(content="What is 40 + 2?")],
                 "intermediate_steps": [],
                 "iteration_count": 0,
                 "final_answer": None,
             }
-        )
+        ))
 
         self.assertEqual(final_state["final_answer"], "42")
         self.assertEqual(final_state["iteration_count"], 1)
@@ -265,14 +266,14 @@ class GraphTests(unittest.TestCase):
         )
         graph = build_graph(llm=llm)
 
-        final_state = graph.invoke(
+        final_state = asyncio.run(graph.ainvoke(
             {
                 "messages": [HumanMessage(content="Solve the system")],
                 "intermediate_steps": [],
                 "iteration_count": 0,
                 "final_answer": None,
             }
-        )
+        ))
 
         action_input = final_state["intermediate_steps"][0]["action_input"]
         observation = final_state["intermediate_steps"][0]["observation"]
@@ -301,14 +302,14 @@ class GraphTests(unittest.TestCase):
         )
         graph = build_graph(llm=llm)
 
-        final_state = graph.invoke(
+        final_state = asyncio.run(graph.ainvoke(
             {
                 "messages": [HumanMessage(content="Solve the system")],
                 "intermediate_steps": [],
                 "iteration_count": 0,
                 "final_answer": None,
             }
-        )
+        ))
 
         action_input = final_state["intermediate_steps"][0]["action_input"]
         observation = final_state["intermediate_steps"][0]["observation"]
@@ -336,14 +337,14 @@ class GraphTests(unittest.TestCase):
         )
         graph = build_graph(llm=llm)
 
-        final_state = graph.invoke(
+        final_state = asyncio.run(graph.ainvoke(
             {
                 "messages": [HumanMessage(content="Solve the system")],
                 "intermediate_steps": [],
                 "iteration_count": 0,
                 "final_answer": None,
             }
-        )
+        ))
 
         action_input = final_state["intermediate_steps"][0]["action_input"]
         observation = final_state["intermediate_steps"][0]["observation"]
@@ -394,7 +395,7 @@ class GraphTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"REACT_AGENT_DISABLE_WEB_SEARCH_GATE": ""}):
             with patch.dict(TOOLS, {"web_search": fake_web_search}):
-                final_state = graph.invoke(
+                final_state = asyncio.run(graph.ainvoke(
                     {
                         "messages": [
                             HumanMessage(content="what is the latest version of python")
@@ -403,7 +404,7 @@ class GraphTests(unittest.TestCase):
                         "iteration_count": 0,
                         "final_answer": None,
                     }
-                )
+                ))
 
         self.assertEqual(
             fake_web_search.calls,
@@ -438,7 +439,7 @@ class GraphTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"REACT_AGENT_DISABLE_WEB_SEARCH_GATE": ""}):
             with patch.dict(TOOLS, {"web_search": FakeWebSearch()}):
-                final_state = graph.invoke(
+                final_state = asyncio.run(graph.ainvoke(
                     {
                         "messages": [
                             HumanMessage(content="what is the latest version of python")
@@ -447,7 +448,7 @@ class GraphTests(unittest.TestCase):
                         "iteration_count": 0,
                         "final_answer": None,
                     }
-                )
+                ))
 
         self.assertIn("Python 3.14.4", final_state["final_answer"])
         self.assertIn("Sources:", final_state["final_answer"])
@@ -478,7 +479,7 @@ class GraphTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"REACT_AGENT_DISABLE_WEB_SEARCH_GATE": ""}):
             with patch.dict(TOOLS, {"web_search": fake_web_search}):
-                final_state = graph.invoke(
+                final_state = asyncio.run(graph.ainvoke(
                     {
                         "messages": [
                             HumanMessage(
@@ -489,7 +490,7 @@ class GraphTests(unittest.TestCase):
                         "iteration_count": 0,
                         "final_answer": None,
                     }
-                )
+                ))
 
         self.assertEqual(
             fake_web_search.calls,
@@ -520,7 +521,7 @@ class GraphTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"REACT_AGENT_DISABLE_WEB_SEARCH_GATE": ""}):
             with patch.dict(TOOLS, {"web_search": fake_web_search}):
-                final_state = graph.invoke(
+                final_state = asyncio.run(graph.ainvoke(
                     {
                         "messages": [
                             HumanMessage(
@@ -535,7 +536,7 @@ class GraphTests(unittest.TestCase):
                         "iteration_count": 0,
                         "final_answer": None,
                     }
-                )
+                ))
 
         self.assertEqual(
             fake_web_search.calls,
@@ -570,7 +571,7 @@ class GraphTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"REACT_AGENT_DISABLE_WEB_SEARCH_GATE": ""}):
             with patch.dict(TOOLS, {"web_search": fake_web_search}):
-                final_state = graph.invoke(
+                final_state = asyncio.run(graph.ainvoke(
                     {
                         "messages": [
                             HumanMessage(content="what is the latest version of python")
@@ -579,7 +580,7 @@ class GraphTests(unittest.TestCase):
                         "iteration_count": 0,
                         "final_answer": None,
                     }
-                )
+                ))
 
         self.assertEqual(len(fake_web_search.calls), 2)
         self.assertEqual(final_state["iteration_count"], 2)
@@ -592,6 +593,76 @@ class GraphTests(unittest.TestCase):
             "Based on the latest web_search results",
             final_state["messages"][-1].content,
         )
+
+
+class MemoryToolStepTests(unittest.TestCase):
+    """Verify memory_read/memory_write tool calls produce correctly-shaped Steps."""
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def _make_state(self, tool_msg):
+        return {
+            "messages": [tool_msg],
+            "intermediate_steps": [],
+            "iteration_count": 0,
+            "final_answer": None,
+        }
+
+    def test_memory_read_step_has_required_keys(self):
+        from agent.graph import MEMORY_READ_TOOL_NAME, tool_node
+
+        store = MagicMock()
+        store.asearch = AsyncMock(return_value=[])
+        config = {"configurable": {"thread_id": "test-session"}}
+        state = self._make_state(make_tool_call(MEMORY_READ_TOOL_NAME, query="recall preferences"))
+
+        result = self._run(tool_node(state, store, config))
+
+        self.assertEqual(len(result["intermediate_steps"]), 1)
+        step = result["intermediate_steps"][-1]
+        self.assertEqual(set(step.keys()), {"thought", "action", "action_input", "observation", "timestamp"})
+        self.assertEqual(step["action"], MEMORY_READ_TOOL_NAME)
+        self.assertEqual(step["action_input"], "recall preferences")
+
+    def test_memory_write_step_has_required_keys(self):
+        from agent.graph import MEMORY_WRITE_TOOL_NAME, tool_node
+
+        store = MagicMock()
+        store.asearch = AsyncMock(return_value=[])
+        store.aput = AsyncMock(return_value=None)
+        config = {"configurable": {"thread_id": "test-session"}}
+        state = self._make_state(make_tool_call(MEMORY_WRITE_TOOL_NAME, content="I live in Sao Paulo"))
+
+        result = self._run(tool_node(state, store, config))
+
+        self.assertEqual(len(result["intermediate_steps"]), 1)
+        step = result["intermediate_steps"][-1]
+        self.assertEqual(set(step.keys()), {"thought", "action", "action_input", "observation", "timestamp"})
+        self.assertEqual(step["action"], MEMORY_WRITE_TOOL_NAME)
+        self.assertEqual(step["action_input"], "I live in Sao Paulo")
+
+    def test_memory_read_with_none_store_returns_graceful_observation(self):
+        from agent.graph import MEMORY_READ_TOOL_NAME, tool_node
+
+        config = {"configurable": {"thread_id": "test-session"}}
+        state = self._make_state(make_tool_call(MEMORY_READ_TOOL_NAME, query="anything"))
+
+        result = self._run(tool_node(state, None, config))
+
+        step = result["intermediate_steps"][-1]
+        self.assertIn("unavailable", step["observation"].lower())
+
+    def test_memory_write_with_none_store_returns_graceful_observation(self):
+        from agent.graph import MEMORY_WRITE_TOOL_NAME, tool_node
+
+        config = {"configurable": {"thread_id": "test-session"}}
+        state = self._make_state(make_tool_call(MEMORY_WRITE_TOOL_NAME, content="some fact"))
+
+        result = self._run(tool_node(state, None, config))
+
+        step = result["intermediate_steps"][-1]
+        self.assertIn("unavailable", step["observation"].lower())
 
 
 if __name__ == "__main__":

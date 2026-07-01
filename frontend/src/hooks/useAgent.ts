@@ -20,6 +20,16 @@ type ApiHistoryMessage = Pick<Message, 'role' | 'content'>
 type PersistedAgentSession = Pick<AgentState, 'messages' | 'steps' | 'runSummary'>
 
 const sessionStorageKey = 'react-agent:chat-session:v1'
+const SESSION_ID_KEY = 'react-agent:session-id'
+
+function getOrCreateSessionId(): string {
+  if (typeof window === 'undefined') return ''
+  const existing = window.localStorage.getItem(SESSION_ID_KEY)
+  if (existing) return existing
+  const id = crypto.randomUUID()
+  window.localStorage.setItem(SESSION_ID_KEY, id)
+  return id
+}
 
 // Generic client-side fallback when the suggestions endpoint is unreachable.
 // The backend owns the richer fallback; this only covers a network failure.
@@ -540,7 +550,10 @@ export function useAgent() {
     try {
       const response = await fetch(`${baseUrl}/run`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Session-Id': getOrCreateSessionId(),
+        },
         body: JSON.stringify({ query, stream: true, history: historyForApi(history) }),
       })
 
@@ -628,6 +641,12 @@ export function useAgent() {
   function clearHistory(): void {
     if (state.isLoading) return
 
+    if (!shouldUseMockFallback()) {
+      void fetch(`${apiBaseUrl()}/memory/${getOrCreateSessionId()}`, { method: 'DELETE' }).catch(
+        () => undefined,
+      )
+    }
+
     setState((current) => ({
       ...current,
       messages: [],
@@ -638,5 +657,6 @@ export function useAgent() {
     }))
   }
 
-  return { state, sendQuery, clearHistory }
+  const sessionId = getOrCreateSessionId()
+  return { state, sendQuery, clearHistory, sessionId }
 }

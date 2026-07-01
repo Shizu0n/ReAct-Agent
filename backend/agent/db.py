@@ -6,6 +6,7 @@ from typing import AsyncGenerator
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 
 
 def _pooler_url() -> str:
@@ -37,6 +38,28 @@ async def pooler_connection() -> AsyncGenerator[psycopg.AsyncConnection, None]:
         row_factory=dict_row,     # required: AsyncPostgresSaver (Phase 2)
     ) as conn:
         yield conn
+
+
+async def create_pool(min_size: int = 1, max_size: int = 3) -> AsyncConnectionPool:
+    """Create an unopened AsyncConnectionPool for the Supabase Transaction Pooler.
+
+    The pool must be opened by the caller (`await pool.open()`). Settings mirror
+    pooler_connection: prepare_threshold=None disables prepared statements (required
+    for Supavisor transaction mode), autocommit=True and dict_row are required by
+    AsyncPostgresSaver / AsyncPostgresStore.
+    """
+    pool = AsyncConnectionPool(
+        conninfo=_pooler_url(),
+        min_size=min_size,
+        max_size=max_size,
+        kwargs={
+            "prepare_threshold": None,
+            "autocommit": True,
+            "row_factory": dict_row,
+        },
+        open=False,
+    )
+    return pool
 
 
 @asynccontextmanager

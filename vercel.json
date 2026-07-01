@@ -33,6 +33,7 @@
     { "source": "/suggestions", "destination": "/api/index.py" },
     { "source": "/trace/:path*", "destination": "/api/index.py" },
     { "source": "/keepalive", "destination": "/api/index.py" },
+    { "source": "/memory/:path*", "destination": "/api/index.py" },
     {
       "source": "/:path((?!assets/|.*\\..*).*)",
       "destination": "/index.html"

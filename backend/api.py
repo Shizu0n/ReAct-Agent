@@ -4,13 +4,16 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections import deque
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -21,11 +24,16 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
-from agent.graph import TOOLS, build_graph
+from agent.graph import MEMORY_NAMESPACE_PREFIX, TOOLS, build_graph
 from agent.llms import UsageTracker, configured_model_info, responder_provider
 from agent.redaction import configure_secure_logging
 from agent.state import MaxIterationsError
 from agent.suggestions import generate_suggestions
+
+# Load backend/.env before configuring redaction (so secret values are registered
+# for scrubbing) and before the lifespan opens the DB pool. On Vercel the env vars
+# are supplied by the platform and no .env exists, so this is a harmless no-op there.
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 configure_secure_logging()
 logger = logging.getLogger("react_agent.api")
@@ -85,7 +93,36 @@ DIST_DIR = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 EVALS_BASELINE = Path(__file__).resolve().parent / "evals" / "baseline.json"
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["10/minute"])
-app = FastAPI(title="01 React Agent API")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        from agent.db import create_pool
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        from langgraph.store.postgres import AsyncPostgresStore
+
+        pool = await create_pool()
+        await pool.open()
+        checkpointer = AsyncPostgresSaver(conn=pool)
+        checkpointer.supports_pipeline = False
+        store = AsyncPostgresStore(conn=pool)
+        store.supports_pipeline = False
+        app.state.pool = pool
+        app.state.checkpointer = checkpointer
+        app.state.store = store
+    except Exception:
+        logger.warning("DB unavailable — memory features degraded (pool/checkpointer/store=None)")
+        app.state.pool = None
+        app.state.checkpointer = None
+        app.state.store = None
+    yield
+    _pool = getattr(app.state, "pool", None)
+    if _pool is not None:
+        await _pool.close()
+
+
+app = FastAPI(title="01 React Agent API", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
@@ -136,13 +173,40 @@ def _history_messages(history: list[ChatMessageRequest]) -> list[BaseMessage]:
     return messages
 
 
-def _initial_state(query: str, history: list[ChatMessageRequest] | None = None) -> dict:
+def _initial_state(
+    query: str,
+    history: list[ChatMessageRequest] | None = None,
+    use_checkpointer: bool = False,
+) -> dict:
+    messages = (
+        [HumanMessage(content=query)]
+        if use_checkpointer
+        else [*_history_messages(history or []), HumanMessage(content=query)]
+    )
     return {
-        "messages": [*_history_messages(history or []), HumanMessage(content=query)],
+        "messages": messages,
         "intermediate_steps": [],
         "iteration_count": 0,
         "final_answer": None,
     }
+
+
+_SESSION_ID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _is_valid_session_id(value: str) -> bool:
+    return bool(_SESSION_ID_RE.fullmatch(value))
+
+
+def _get_session_id(request: Request) -> str:
+    value = request.headers.get("x-session-id", "").strip()
+    return value if _is_valid_session_id(value) else str(uuid.uuid4())
+
+
+def _graph_config(session_id: str) -> dict:
+    return {"configurable": {"thread_id": session_id}}
 
 
 def _store_response(response: AgentResponse) -> None:
@@ -192,15 +256,23 @@ def _response_from_trace(
     )
 
 
-def _run_agent(
+async def _run_agent(
     query: str,
     run_id: str,
     started_at: float,
     history: list[ChatMessageRequest] | None = None,
+    session_id: str | None = None,
+    checkpointer=None,
+    store=None,
 ) -> AgentResponse:
     tracker = UsageTracker()
-    graph = build_graph(tracker=tracker)
-    final_state = graph.invoke(_initial_state(query, history))
+    graph = build_graph(tracker=tracker, checkpointer=checkpointer, store=store)
+    use_checkpointer = checkpointer is not None
+    config = _graph_config(session_id or str(uuid.uuid4()))
+    final_state = await graph.ainvoke(
+        _initial_state(query, history, use_checkpointer=use_checkpointer),
+        config=config,
+    )
     response = _build_response(run_id, started_at, final_state, tracker.summary())
     _store_response(response)
     return response
@@ -252,14 +324,20 @@ async def _stream_agent(
     run_id: str,
     started_at: float,
     history: list[ChatMessageRequest] | None = None,
+    session_id: str | None = None,
+    checkpointer=None,
+    store=None,
 ) -> AsyncIterator[dict[str, str]]:
     printed_steps = 0
-    final_state = _initial_state(query, history)
     tracker = UsageTracker()
+    use_checkpointer = checkpointer is not None
+    initial_state = _initial_state(query, history, use_checkpointer=use_checkpointer)
+    config = _graph_config(session_id or str(uuid.uuid4()))
+    final_state = initial_state
 
     try:
-        graph = build_graph(tracker=tracker)
-        for state in graph.stream(final_state, stream_mode="values"):
+        graph = build_graph(tracker=tracker, checkpointer=checkpointer, store=store)
+        async for state in graph.astream(initial_state, config=config, stream_mode="values"):
             final_state = state
             steps = state.get("intermediate_steps", [])
             while printed_steps < len(steps):
@@ -359,21 +437,41 @@ async def _sse_response(iterator: AsyncIterator[dict[str, str]]) -> StreamingRes
 async def run_agent(request: Request, payload: QueryRequest):
     run_id = uuid.uuid4().hex
     started_at = time.perf_counter()
+    session_id = _get_session_id(request)
+    checkpointer = getattr(request.app.state, "checkpointer", None)
+    store = getattr(request.app.state, "store", None)
     if payload.stream:
         return await _sse_response(
-            _stream_agent(payload.query, run_id, started_at, payload.history)
+            _stream_agent(
+                payload.query, run_id, started_at, payload.history,
+                session_id=session_id, checkpointer=checkpointer, store=store,
+            )
         )
-    return _run_agent(payload.query, run_id, started_at, payload.history)
+    return await _run_agent(
+        payload.query, run_id, started_at, payload.history,
+        session_id=session_id, checkpointer=checkpointer, store=store,
+    )
 
 
 @app.get("/run")
 @app.get("/api/run")
-async def stream_agent(query: str, stream: bool = True):
+async def stream_agent(request: Request, query: str, stream: bool = True):
     run_id = uuid.uuid4().hex
     started_at = time.perf_counter()
+    session_id = _get_session_id(request)
+    checkpointer = getattr(request.app.state, "checkpointer", None)
+    store = getattr(request.app.state, "store", None)
     if stream:
-        return await _sse_response(_stream_agent(query, run_id, started_at))
-    return _run_agent(query, run_id, started_at)
+        return await _sse_response(
+            _stream_agent(
+                query, run_id, started_at,
+                session_id=session_id, checkpointer=checkpointer, store=store,
+            )
+        )
+    return await _run_agent(
+        query, run_id, started_at,
+        session_id=session_id, checkpointer=checkpointer, store=store,
+    )
 
 
 @app.get("/health")
@@ -456,6 +554,24 @@ async def get_trace(run_id: str) -> AgentResponse:
     if response is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return response
+
+
+@app.delete("/memory/{session_id}")
+@app.delete("/api/memory/{session_id}")
+async def clear_memory(session_id: str, request: Request) -> dict:
+    if not _is_valid_session_id(session_id):
+        raise HTTPException(status_code=400, detail="invalid session id")
+    checkpointer = getattr(request.app.state, "checkpointer", None)
+    pool = getattr(request.app.state, "pool", None)
+    if checkpointer is not None:
+        await checkpointer.adelete_thread(session_id)
+    if pool is not None:
+        async with pool.connection() as conn:
+            await conn.execute(
+                "DELETE FROM store WHERE prefix LIKE %s",
+                (f"{MEMORY_NAMESPACE_PREFIX}.{session_id}%",),
+            )
+    return {"status": "cleared", "session_id": session_id}
 
 
 @app.get("/", include_in_schema=False)
