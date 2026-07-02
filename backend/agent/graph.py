@@ -34,6 +34,7 @@ PYTHON_EXECUTOR_TOOL_NAME = cast(Any, python_executor).name
 CALCULATOR_TOOL_NAME = cast(Any, calculator).name
 MEMORY_READ_TOOL_NAME = "memory_read"
 MEMORY_WRITE_TOOL_NAME = "memory_write"
+DOCUMENT_SEARCH_TOOL_NAME = "document_search"
 MEMORY_NAMESPACE_PREFIX = "memories"
 MAX_MEMORIES_STORED = int(os.getenv("MEMORY_MAX_STORED", "20"))
 TOOLS = {
@@ -47,6 +48,7 @@ TOOL_INPUT_KEYS = {
     CALCULATOR_TOOL_NAME: "expression",
     MEMORY_READ_TOOL_NAME: "query",
     MEMORY_WRITE_TOOL_NAME: "content",
+    DOCUMENT_SEARCH_TOOL_NAME: "query",
 }
 
 # OpenAI-style tool schemas. The descriptions are deliberately directive: tool
@@ -161,6 +163,29 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": DOCUMENT_SEARCH_TOOL_NAME,
+            "description": (
+                "Search the documents the user uploaded in this session. Call this "
+                "when the user asks about the content of an uploaded file. Returns "
+                "relevant passages with citations. If no documents are uploaded or "
+                "nothing relevant is found, it returns a clear message; do not guess "
+                "the answer."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The question to search for in uploaded documents.",
+                    }
+                },
+                "required": ["query"],
             },
         },
     },
@@ -402,6 +427,46 @@ async def _run_memory_write(store: BaseStore, session_id: str, content: str) -> 
     return f"Stored: {content}"
 
 
+async def _run_document_search(pool, session_id: str, query: str) -> str:
+    if pool is None:
+        return "Document search is unavailable in this session."
+    from agent.embedding import embed_query
+
+    query_embedding = await embed_query(query, os.getenv("GEMINI_API_KEY", ""))
+    vec_str = "[" + ",".join(str(round(x, 8)) for x in query_embedding) + "]"
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            """
+            SELECT dc.content, d.filename, dc.chunk_index
+            FROM document_chunks dc
+            JOIN documents d ON d.id = dc.document_id
+            WHERE dc.session_id = %s
+            ORDER BY dc.embedding <=> %s::vector(768)
+            LIMIT 5
+            """,
+            (session_id, vec_str),
+        )
+        rows = await cur.fetchall()
+    if not rows:
+        return (
+            "No relevant content was found in the documents uploaded for this "
+            "session. If no documents were uploaded, tell the user so; do not "
+            "answer from general knowledge."
+        )
+    lines = ["--- BEGIN RETRIEVED DOCUMENTS ---"]
+    for row in rows:
+        lines.append(f"[Source: {row['filename']}, chunk {row['chunk_index'] + 1}]")
+        lines.append(row["content"])
+        lines.append("")
+    lines.append("--- END RETRIEVED DOCUMENTS ---")
+    lines.append(
+        f"{len(rows)} passage(s) retrieved. Cite sources as "
+        "[Source: filename, chunk N] in your answer. If these passages do not "
+        "answer the question, say so explicitly instead of guessing."
+    )
+    return "\n".join(lines)
+
+
 def _run_tool(action: str, action_input: str) -> str:
     tool = TOOLS.get(action)
     if tool is None:
@@ -420,7 +485,7 @@ def _normalize_tool_input(action: str, action_input: str) -> str:
     return action_input
 
 
-async def tool_node(state: AgentState, store: BaseStore, config: RunnableConfig) -> dict[str, Any]:
+async def tool_node(state: AgentState, store: BaseStore, config: RunnableConfig, pool=None) -> dict[str, Any]:
     messages = state.get("messages", [])
     last_ai = _last_ai_message(messages)
     tool_calls = list(last_ai.tool_calls) if last_ai and last_ai.tool_calls else []
@@ -442,6 +507,11 @@ async def tool_node(state: AgentState, store: BaseStore, config: RunnableConfig)
                 observation = "Memory is unavailable in this session."
             else:
                 observation = await _run_memory_write(store, session_id, action_input)
+        elif action == DOCUMENT_SEARCH_TOOL_NAME:
+            if pool is None:
+                observation = "Document search is unavailable in this session."
+            else:
+                observation = await _run_document_search(pool, session_id, action_input)
         else:
             observation = _run_tool(action, action_input)
         new_messages.append(
@@ -475,13 +545,17 @@ def should_continue(state: AgentState) -> str:
     return "tools" if last_ai and last_ai.tool_calls else "end"
 
 
-def build_graph(llm: Any | None = None, tracker: UsageTracker | None = None, checkpointer=None, store=None):
+def build_graph(llm: Any | None = None, tracker: UsageTracker | None = None, checkpointer=None, store=None, pool=None):
     active_llm = llm or _create_default_llm()
     if tracker is not None:
         active_llm = UsageTrackingLLM(active_llm, tracker)
     workflow = StateGraph(AgentState)
     workflow.add_node("agent_node", lambda state: agent_node(state, active_llm))  # type: ignore
-    workflow.add_node("tool_node", tool_node)
+
+    async def _tool_node(state: AgentState, store: BaseStore, config: RunnableConfig) -> dict[str, Any]:
+        return await tool_node(state, store, config, pool=pool)
+
+    workflow.add_node("tool_node", _tool_node)
     workflow.add_edge(START, "agent_node")
     workflow.add_conditional_edges(
         "agent_node",

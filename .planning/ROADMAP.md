@@ -98,16 +98,16 @@ reliability thinking, which is the core recruiter-facing signal.
 
 **Wave 1**
 
-- [ ] 03-01-PLAN.md — Ingestion library: embedding.py (batch + 429 backoff) + ingest.py (extract/strip/chunk/cap/embed/insert) + pypdf legitimacy gate (RAG-01, RAG-02, RAG-04, RAG-09-ingest)
+- [x] 03-01-PLAN.md — Ingestion library: embedding.py (batch + 429 backoff) + ingest.py (extract/strip/chunk/cap/embed/insert) + pypdf legitimacy gate (RAG-01, RAG-02, RAG-04, RAG-09-ingest)
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 03-02-PLAN.md — Upload + documents endpoints (2 MB/type guards, per-session list) + vercel.json rewrites & maxDuration:60 (RAG-01, RAG-03, RAG-04, RAG-07)
+- [x] 03-02-PLAN.md — Upload + documents endpoints (2 MB/type guards, per-session list) + vercel.json rewrites & maxDuration:60 (RAG-01, RAG-03, RAG-04, RAG-07)
 
 **Wave 3** *(blocked on Wave 2; 03-03 ∥ 03-04)*
 
-- [ ] 03-03-PLAN.md — Frontend upload widget + ingestion progress + per-session document list (RAG-01, RAG-03, RAG-07)
-- [ ] 03-04-PLAN.md — document_search tool: session-scoped pgvector retrieval, citations, no-hallucination guard, prompt-injection barrier, pool wiring (RAG-05, RAG-06, RAG-08, RAG-09-retrieve)
+- [x] 03-03-PLAN.md — Frontend upload widget + ingestion progress + per-session document list (RAG-01, RAG-03, RAG-07)
+- [x] 03-04-PLAN.md — document_search tool: session-scoped pgvector retrieval, citations, no-hallucination guard, prompt-injection barrier, pool wiring (RAG-05, RAG-06, RAG-08, RAG-09-retrieve)
 
 ### Phase 4: Observability
 
@@ -146,6 +146,6 @@ reliability thinking, which is the core recruiter-facing signal.
 |-------|----------------|--------|-----------|
 | 1. Foundation | 4/4 | ✓ Complete | 2026-06-29 |
 | 2. Memory | 4/4 | ✓ Complete | 2026-07-01 |
-| 3. RAG | 0/4 | Planned | - |
+| 3. RAG | 4/4 | Implemented (tests green); live verify pending | 2026-07-02 |
 | 4. Observability | 0/? | Not started | - |
 | 5. MCP | 0/? | Not started | - |

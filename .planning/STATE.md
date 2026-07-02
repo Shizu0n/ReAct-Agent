@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 02
-current_phase_name: memory
+current_phase: 03
+current_phase_name: rag
 status: executing
-stopped_at: Phase 02 complete — all 4 plans executed, SC1–SC5 verified live
-last_updated: "2026-07-01T22:46:49.374Z"
-last_activity: 2026-07-01
-last_activity_desc: Phase 02 plan 02-04 complete (clear memory DELETE endpoint + UI wiring; live round-trip passed)
+stopped_at: Phase 03 RAG implemented (4/4 plans; 22 new tests, 105 total green; frontend builds). Live upload/retrieval round-trip pending human verify. NOT committed.
+last_updated: "2026-07-02"
+last_activity: 2026-07-02
+last_activity_desc: Phase 03 RAG implemented inline (ingestion lib, upload/documents endpoints, frontend widget, document_search tool); tests green; awaiting user commit + live verify
 progress:
   total_phases: 5
   completed_phases: 2
-  total_plans: 8
-  completed_plans: 8
-  percent: 40
+  total_plans: 12
+  completed_plans: 12
+  percent: 60
 ---
 
 # Project State
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-28)
 
 **Core value:** A recruiter can open the live demo and, within minutes, see legible evidence of agent-engineering skill (visible reasoning, cross-session memory, document RAG, execution traces, evals) — all on $0 model spend.
-**Current focus:** Phase 02 — memory
+**Current focus:** Phase 03 - rag
 
 ## Current Position
 
-Phase: 02 (memory) — COMPLETE
+Phase: 03 (rag) - implemented (tests green; live verify pending)
 Plan: 4 of 4
-Status: Ready to execute
-Last activity: 2026-07-01 — Phase 02 plan 02-04 complete (clear memory DELETE endpoint + UI wiring; live round-trip passed)
+Status: Implemented inline, NOT committed
+Last activity: 2026-07-02 - Phase 03 RAG implemented (4 plans; 105 tests green; frontend builds)
 
 Progress: [██████████] 100%
 
@@ -82,5 +82,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-07-01T00:00:00.000Z
-Stopped at: Phase 02 complete — all 4 plans executed; SC1–SC5 verified live; next is Phase 03 (RAG)
+Stopped at: Phase 03 RAG implemented (not committed); next is live verify + user commit, then Phase 04 (Observability)
 Resume file: None

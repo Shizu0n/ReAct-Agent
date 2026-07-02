@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -84,6 +84,25 @@ class SuggestionsRequest(BaseModel):
 
 class SuggestionsResponse(BaseModel):
     suggestions: list[str]
+
+
+class UploadResponse(BaseModel):
+    status: str
+    filename: str
+    chunks_stored: int
+    chunks_skipped: int
+    doc_id: str
+
+
+class DocumentInfo(BaseModel):
+    id: str
+    filename: str
+    chunk_count: int
+    created_at: str
+
+
+class DocumentListResponse(BaseModel):
+    documents: list[DocumentInfo]
 
 
 RUNS: dict[str, AgentResponse] = {}
@@ -264,9 +283,10 @@ async def _run_agent(
     session_id: str | None = None,
     checkpointer=None,
     store=None,
+    pool=None,
 ) -> AgentResponse:
     tracker = UsageTracker()
-    graph = build_graph(tracker=tracker, checkpointer=checkpointer, store=store)
+    graph = build_graph(tracker=tracker, checkpointer=checkpointer, store=store, pool=pool)
     use_checkpointer = checkpointer is not None
     config = _graph_config(session_id or str(uuid.uuid4()))
     final_state = await graph.ainvoke(
@@ -327,6 +347,7 @@ async def _stream_agent(
     session_id: str | None = None,
     checkpointer=None,
     store=None,
+    pool=None,
 ) -> AsyncIterator[dict[str, str]]:
     printed_steps = 0
     tracker = UsageTracker()
@@ -336,7 +357,7 @@ async def _stream_agent(
     final_state = initial_state
 
     try:
-        graph = build_graph(tracker=tracker, checkpointer=checkpointer, store=store)
+        graph = build_graph(tracker=tracker, checkpointer=checkpointer, store=store, pool=pool)
         async for state in graph.astream(initial_state, config=config, stream_mode="values"):
             final_state = state
             steps = state.get("intermediate_steps", [])
@@ -440,16 +461,17 @@ async def run_agent(request: Request, payload: QueryRequest):
     session_id = _get_session_id(request)
     checkpointer = getattr(request.app.state, "checkpointer", None)
     store = getattr(request.app.state, "store", None)
+    pool = getattr(request.app.state, "pool", None)
     if payload.stream:
         return await _sse_response(
             _stream_agent(
                 payload.query, run_id, started_at, payload.history,
-                session_id=session_id, checkpointer=checkpointer, store=store,
+                session_id=session_id, checkpointer=checkpointer, store=store, pool=pool,
             )
         )
     return await _run_agent(
         payload.query, run_id, started_at, payload.history,
-        session_id=session_id, checkpointer=checkpointer, store=store,
+        session_id=session_id, checkpointer=checkpointer, store=store, pool=pool,
     )
 
 
@@ -461,16 +483,17 @@ async def stream_agent(request: Request, query: str, stream: bool = True):
     session_id = _get_session_id(request)
     checkpointer = getattr(request.app.state, "checkpointer", None)
     store = getattr(request.app.state, "store", None)
+    pool = getattr(request.app.state, "pool", None)
     if stream:
         return await _sse_response(
             _stream_agent(
                 query, run_id, started_at,
-                session_id=session_id, checkpointer=checkpointer, store=store,
+                session_id=session_id, checkpointer=checkpointer, store=store, pool=pool,
             )
         )
     return await _run_agent(
         query, run_id, started_at,
-        session_id=session_id, checkpointer=checkpointer, store=store,
+        session_id=session_id, checkpointer=checkpointer, store=store, pool=pool,
     )
 
 
@@ -572,6 +595,73 @@ async def clear_memory(session_id: str, request: Request) -> dict:
                 (f"{MEMORY_NAMESPACE_PREFIX}.{session_id}%",),
             )
     return {"status": "cleared", "session_id": session_id}
+
+
+MAX_UPLOAD_BYTES = 2 * 1024 * 1024  # 2 MB; headroom under Vercel's 4.5 MB body cap
+
+
+def _is_allowed_upload(filename: str, content_type: str) -> bool:
+    content_type = (content_type or "").lower()
+    name = (filename or "").lower()
+    if content_type == "application/pdf" or content_type.startswith("text/"):
+        return True
+    return name.endswith((".pdf", ".txt", ".md"))
+
+
+@app.post("/upload", response_model=UploadResponse)
+@app.post("/api/upload", response_model=UploadResponse)
+async def upload_document(request: Request, file: UploadFile = File(...)) -> UploadResponse:
+    session_id = _get_session_id(request)
+    pool = getattr(request.app.state, "pool", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File exceeds 2 MB limit")
+    if not _is_allowed_upload(file.filename or "", file.content_type or ""):
+        raise HTTPException(
+            status_code=415, detail="Only PDF and plain-text files are supported"
+        )
+    from agent.ingest import ingest_document
+
+    result = await ingest_document(
+        pool, session_id, file.filename or "upload", content, file.content_type or ""
+    )
+    return UploadResponse(**result)
+
+
+@app.get("/documents/{session_id}", response_model=DocumentListResponse)
+@app.get("/api/documents/{session_id}", response_model=DocumentListResponse)
+async def list_documents(session_id: str, request: Request) -> DocumentListResponse:
+    if not _is_valid_session_id(session_id):
+        raise HTTPException(status_code=400, detail="invalid session id")
+    pool = getattr(request.app.state, "pool", None)
+    if pool is None:
+        return DocumentListResponse(documents=[])
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            """
+            SELECT d.id, d.filename, d.created_at, COUNT(dc.id) AS chunk_count
+            FROM documents d
+            LEFT JOIN document_chunks dc ON dc.document_id = d.id
+            WHERE d.session_id = %s
+            GROUP BY d.id, d.filename, d.created_at
+            ORDER BY d.created_at DESC
+            """,
+            (session_id,),
+        )
+        rows = await cur.fetchall()
+    return DocumentListResponse(
+        documents=[
+            DocumentInfo(
+                id=str(row["id"]),
+                filename=row["filename"],
+                chunk_count=int(row["chunk_count"]),
+                created_at=row["created_at"].isoformat(),
+            )
+            for row in rows
+        ]
+    )
 
 
 @app.get("/", include_in_schema=False)

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import { Activity, Info, PanelRightClose, PanelRightOpen, Route } from 'lucide-react'
 import { ChatPanel } from './demo/ChatPanel'
+import { DocumentPanel } from './demo/DocumentPanel'
 import { ReasoningPanel } from './demo/ReasoningPanel'
 import type { AgentState } from '../types'
 
@@ -160,6 +161,8 @@ export function ChatWorkspace({
             <span className="ml-3 text-[var(--text-secondary)]">{state.error}</span>
           </div>
         ) : null}
+
+        <DocumentPanel sessionId={sessionId} />
 
         <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden">
           <ChatPanel

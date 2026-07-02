@@ -91,3 +91,24 @@ export interface AgentConfig {
   fallback_models: ModelInfo[]
   tools: string[]
 }
+
+export interface DocumentInfo {
+  id: string
+  filename: string
+  chunk_count: number
+  created_at: string
+}
+
+export interface UploadResult {
+  status: 'ok' | 'truncated' | 'empty'
+  filename: string
+  chunks_stored: number
+  chunks_skipped: number
+  doc_id: string
+}
+
+export interface DocumentState {
+  documents: DocumentInfo[]
+  uploading: boolean
+  error: string | null
+}
