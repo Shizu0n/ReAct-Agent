@@ -138,7 +138,11 @@ reliability thinking, which is the core recruiter-facing signal.
   3. With `MCP_FETCH_SERVER_URL` unset, the agent starts and responds normally with no error message or degraded behavior
   4. The README contains an architecture diagram of the MCP integration (agent ↔ client ↔ HTTP ↔ server)
 
-**Plans**: TBD
+**Plans**:
+  1. 05-01-PLAN.md — Companion FastMCP server + hardened `fetch_url` tool (MCP-01)
+  2. 05-02-PLAN.md — Mount `/mcp` into the app + serverless reachability (MCP-01)
+  3. 05-03-PLAN.md — Agent as dynamic MCP client: discovery, trace-parity dispatch, degrade (MCP-02/03/04)
+  4. 05-04-PLAN.md — README MCP architecture section (MCP-05)
 
 ## Progress
 
@@ -148,4 +152,4 @@ reliability thinking, which is the core recruiter-facing signal.
 | 2. Memory | 4/4 | ✓ Complete | 2026-07-01 |
 | 3. RAG | 4/4 | Implemented (tests green); live verify pending | 2026-07-02 |
 | 4. Observability | 0/? | Not started | - |
-| 5. MCP | 0/? | Not started | - |
+| 5. MCP | 4/4 | Implemented (146 tests green); live deploy verify + commit pending | 2026-07-03 |

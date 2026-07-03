@@ -42,6 +42,8 @@
     { "source": "/memory/:path*", "destination": "/api/index.py" },
     { "source": "/upload", "destination": "/api/index.py" },
     { "source": "/documents/:path*", "destination": "/api/index.py" },
+    { "source": "/mcp/:path*", "destination": "/api/index.py" },
+    { "source": "/mcp", "destination": "/api/index.py" },
     {
       "source": "/:path((?!assets/|.*\\..*).*)",
       "destination": "/index.html"

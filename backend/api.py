@@ -8,7 +8,7 @@ import re
 import time
 import uuid
 from collections import deque
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
@@ -26,6 +26,8 @@ from slowapi.util import get_remote_address
 
 from agent.graph import MEMORY_NAMESPACE_PREFIX, TOOLS, build_graph
 from agent.llms import UsageTracker, configured_model_info, responder_provider
+from agent.mcp_client import discover_mcp_tools
+from agent.mcp_server import mcp_server
 from agent.redaction import configure_secure_logging
 from agent.state import MaxIterationsError
 from agent.suggestions import generate_suggestions
@@ -131,29 +133,49 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["10/minute"])
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    try:
-        from agent.db import create_pool
-        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-        from langgraph.store.postgres import AsyncPostgresStore
+    async with AsyncExitStack() as stack:
+        try:
+            from agent.db import create_pool
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+            from langgraph.store.postgres import AsyncPostgresStore
 
-        pool = await create_pool()
-        await pool.open()
-        checkpointer = AsyncPostgresSaver(conn=pool)
-        checkpointer.supports_pipeline = False
-        store = AsyncPostgresStore(conn=pool)
-        store.supports_pipeline = False
-        app.state.pool = pool
-        app.state.checkpointer = checkpointer
-        app.state.store = store
-    except Exception:
-        logger.warning("DB unavailable — memory features degraded (pool/checkpointer/store=None)")
-        app.state.pool = None
-        app.state.checkpointer = None
-        app.state.store = None
-    yield
-    _pool = getattr(app.state, "pool", None)
-    if _pool is not None:
-        await _pool.close()
+            pool = await create_pool()
+            await pool.open()
+            checkpointer = AsyncPostgresSaver(conn=pool)
+            checkpointer.supports_pipeline = False
+            store = AsyncPostgresStore(conn=pool)
+            store.supports_pipeline = False
+            app.state.pool = pool
+            app.state.checkpointer = checkpointer
+            app.state.store = store
+        except Exception:
+            logger.warning("DB unavailable — memory features degraded (pool/checkpointer/store=None)")
+            app.state.pool = None
+            app.state.checkpointer = None
+            app.state.store = None
+
+        # Run the mounted MCP server's session manager for the app's lifetime.
+        # Kept independent of the DB-pool try/except above: a pool failure must
+        # not skip this, and an MCP failure must not be mistaken for a DB failure
+        # (05-RESEARCH.md Pitfall 4).
+        await stack.enter_async_context(mcp_server.session_manager.run())
+
+        # Discover MCP tools once per warm instance, gated by MCP_FETCH_SERVER_URL.
+        # Independent of the pool try/except and the session_manager context (Pitfall 4):
+        # neither failure may cascade. Unset URL → ([], []) with zero I/O, so startup
+        # latency is unchanged when MCP is disabled (MCP-04).
+        try:
+            app.state.mcp_tools, app.state.mcp_schemas = await discover_mcp_tools()
+        except Exception:
+            logger.warning("MCP discovery failed at startup; continuing without MCP tools")
+            app.state.mcp_tools = []
+            app.state.mcp_schemas = []
+
+        yield
+
+        _pool = getattr(app.state, "pool", None)
+        if _pool is not None:
+            await _pool.close()
 
 
 app = FastAPI(title="01 React Agent API", lifespan=lifespan)
@@ -191,6 +213,12 @@ async def log_requests(request: Request, call_next):
         elapsed,
     )
     return response
+
+
+# Mount the companion MCP server. Registered here — after middleware, before any
+# route — so it precedes the serve_frontend "/{path:path}" catch-all; otherwise the
+# SPA fallback would hijack GET/POST /mcp. Its session manager runs in the lifespan.
+app.mount("/mcp", mcp_server.streamable_http_app())
 
 
 def _history_messages(history: list[ChatMessageRequest]) -> list[BaseMessage]:
@@ -299,9 +327,14 @@ async def _run_agent(
     checkpointer=None,
     store=None,
     pool=None,
+    mcp_tools=None,
+    mcp_schemas=None,
 ) -> AgentResponse:
     tracker = UsageTracker()
-    graph = build_graph(tracker=tracker, checkpointer=checkpointer, store=store, pool=pool)
+    graph = build_graph(
+        tracker=tracker, checkpointer=checkpointer, store=store, pool=pool,
+        mcp_tools=mcp_tools, mcp_schemas=mcp_schemas,
+    )
     use_checkpointer = checkpointer is not None
     thread_id = session_id or str(uuid.uuid4())
     config = _graph_config(thread_id)
@@ -368,6 +401,8 @@ async def _stream_agent(
     checkpointer=None,
     store=None,
     pool=None,
+    mcp_tools=None,
+    mcp_schemas=None,
 ) -> AsyncIterator[dict[str, str]]:
     printed_steps = 0
     tracker = UsageTracker()
@@ -378,7 +413,10 @@ async def _stream_agent(
     final_state = initial_state
 
     try:
-        graph = build_graph(tracker=tracker, checkpointer=checkpointer, store=store, pool=pool)
+        graph = build_graph(
+            tracker=tracker, checkpointer=checkpointer, store=store, pool=pool,
+            mcp_tools=mcp_tools, mcp_schemas=mcp_schemas,
+        )
         async for state in graph.astream(initial_state, config=config, stream_mode="values"):
             final_state = state
             steps = state.get("intermediate_steps", [])
@@ -487,16 +525,20 @@ async def run_agent(request: Request, payload: QueryRequest):
     checkpointer = getattr(request.app.state, "checkpointer", None)
     store = getattr(request.app.state, "store", None)
     pool = getattr(request.app.state, "pool", None)
+    mcp_tools = getattr(request.app.state, "mcp_tools", [])
+    mcp_schemas = getattr(request.app.state, "mcp_schemas", [])
     if payload.stream:
         return await _sse_response(
             _stream_agent(
                 payload.query, run_id, started_at, payload.history,
                 session_id=session_id, checkpointer=checkpointer, store=store, pool=pool,
+                mcp_tools=mcp_tools, mcp_schemas=mcp_schemas,
             )
         )
     return await _run_agent(
         payload.query, run_id, started_at, payload.history,
         session_id=session_id, checkpointer=checkpointer, store=store, pool=pool,
+        mcp_tools=mcp_tools, mcp_schemas=mcp_schemas,
     )
 
 
@@ -509,16 +551,20 @@ async def stream_agent(request: Request, query: str, stream: bool = True):
     checkpointer = getattr(request.app.state, "checkpointer", None)
     store = getattr(request.app.state, "store", None)
     pool = getattr(request.app.state, "pool", None)
+    mcp_tools = getattr(request.app.state, "mcp_tools", [])
+    mcp_schemas = getattr(request.app.state, "mcp_schemas", [])
     if stream:
         return await _sse_response(
             _stream_agent(
                 query, run_id, started_at,
                 session_id=session_id, checkpointer=checkpointer, store=store, pool=pool,
+                mcp_tools=mcp_tools, mcp_schemas=mcp_schemas,
             )
         )
     return await _run_agent(
         query, run_id, started_at,
         session_id=session_id, checkpointer=checkpointer, store=store, pool=pool,
+        mcp_tools=mcp_tools, mcp_schemas=mcp_schemas,
     )
 
 

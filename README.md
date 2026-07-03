@@ -131,6 +131,38 @@ flowchart TB
 | `python_executor` | Runs code in an isolated subprocess with AST validation, import whitelist (`math`, `json`, `re`, `statistics`, `random`, `itertools`, `functools`, `sympy`, `numpy`), blocked builtins (`open`, `exec`, `eval`, `compile`, `__import__`, etc.), and a 10s timeout. Automatically strips Markdown fences and redundant safe imports. | Local subprocess sandbox |
 | `calculator` | Evaluates math expressions with `eval()` and no builtins, AST validation of every node, and full access to the `math` module. Only arithmetic operators, constants, and `math.*` functions are allowed. | Local `math` module |
 
+## MCP
+
+The agent is its own **MCP (Model Context Protocol) client**. A companion MCP server is mounted at `/mcp` inside the **same** FastAPI app (no second deployment), so the agent calls back into its own Vercel Function over **Streamable HTTP** (JSON-RPC: `initialize` / `tools/list` / `tools/call`).
+
+- **Companion server** (`backend/agent/mcp_server.py`): a `FastMCP` instance (`stateless_http=True`, so no session state must survive across serverless instances) exposing one real tool, `fetch_url` — a webpage reader hardened against SSRF (scheme allow-list + private/loopback/link-local host blocking), DoS (byte/char caps + timeout), and prompt injection (output wrapped in `--- BEGIN/END FETCHED PAGE ---` delimiters the system prompt treats as untrusted content).
+- **Dynamic discovery** (`backend/agent/mcp_client.py::discover_mcp_tools`): once per warm instance the agent runs `tools/list` through `MultiServerMCPClient` and converts the result to OpenAI-style schemas — tools are discovered, never hardcoded.
+- **Trace parity**: an MCP tool call produces the same `Step` (thought / action / observation / timing) as a native tool, so it renders identically in the Reasoning Panel — zero frontend special-casing.
+
+**Toggle & graceful degradation** — `MCP_FETCH_SERVER_URL` is the off-switch. Set (to the deployed `/mcp/` route) → the agent discovers and offers `fetch_url`. Unset → zero network calls at startup, no latency, no error banner; the agent runs with only its native tools. The route is exposed via a `/mcp/:path*` rewrite in `vercel.json`; the reachable endpoint is `/mcp/` (trailing slash — `discover_mcp_tools` normalizes the configured URL to it).
+
+```mermaid
+flowchart LR
+    subgraph App["Same Vercel Function (FastAPI)"]
+        Agent["Agent<br/>(tool_node)"]
+        Client["MultiServerMCPClient<br/>(discover_mcp_tools)"]
+        subgraph MCPServer["Mounted /mcp (FastMCP)"]
+            Server["Streamable HTTP app<br/>stateless_http=True"]
+            Fetch["fetch_url<br/>(SSRF / DoS hardened)"]
+        end
+    end
+
+    Agent -->|"tools/list + tools/call"| Client
+    Client -->|"Streamable HTTP (JSON-RPC)"| Server
+    Server --> Fetch
+    Fetch -.->|"page text (delimiter-wrapped)"| Server
+    Server -.->|"observation"| Client
+    Client -.->|"BaseTool result → Step"| Agent
+
+    style App fill:#1a1a2e,stroke:#F6C177,color:#fff
+    style MCPServer fill:#0d0d1a,stroke:#D6FF7F,color:#fff
+```
+
 ## Model Providers
 
 The agent does not use OpenAI or Anthropic. The default chain uses only providers configured in `.env`, in this fallback order:
@@ -305,6 +337,10 @@ SUGGESTER_PROVIDER=groq     # provider the suggester prefers for prompt suggesti
 
 # Web search (optional but recommended)
 TAVILY_API_KEY=
+
+# MCP companion tool (optional): the deployed /mcp/ route, trailing slash.
+# Unset cleanly disables MCP — the agent runs with only its native tools.
+MCP_FETCH_SERVER_URL=
 ```
 
 Frontend env (optional):

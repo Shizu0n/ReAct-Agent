@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 03
-current_phase_name: rag
+current_phase: 05
+current_phase_name: mcp
 status: executing
-stopped_at: Phase 03 RAG implemented (4/4 plans; 22 new tests, 105 total green; frontend builds). Live upload/retrieval round-trip pending human verify. NOT committed.
-last_updated: "2026-07-03T13:14:00.964Z"
-last_activity: 2026-07-02
-last_activity_desc: Phase 03 RAG implemented (4 plans; 105 tests green; frontend builds)
+stopped_at: Phase 05 MCP implemented (4/4 plans; 21 new tests, 146 total green). Live deploy smoke (05-02) + live SC1/SC2/SC3 (05-03) pending human verify. NOT committed.
+last_updated: "2026-07-03T19:01:25Z"
+last_activity: 2026-07-03
+last_activity_desc: Phase 05 MCP implemented (4 plans; 146 tests green; real discovery round-trip verified offline)
 progress:
   total_phases: 5
-  completed_phases: 2
-  total_plans: 12
-  completed_plans: 12
-  percent: 60
+  completed_phases: 4
+  total_plans: 16
+  completed_plans: 16
+  percent: 80
 ---
 
 # Project State
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-28)
 
 **Core value:** A recruiter can open the live demo and, within minutes, see legible evidence of agent-engineering skill (visible reasoning, cross-session memory, document RAG, execution traces, evals) — all on $0 model spend.
-**Current focus:** Phase 03 - rag
+**Current focus:** Phase 05 - mcp
 
 ## Current Position
 
-Phase: 03 (rag) - implemented (tests green; live verify pending)
+Phase: 05 (mcp) - implemented (146 tests green; live deploy verify pending)
 Plan: 4 of 4
 Status: Implemented inline, NOT committed
-Last activity: 2026-07-02 - Phase 03 RAG implemented (4 plans; 105 tests green; frontend builds)
+Last activity: 2026-07-03 - Phase 05 MCP implemented (4 plans; 146 tests green; real discovery round-trip verified offline)
 
 Progress: [██████████] 100%
 
@@ -82,5 +82,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-07-01T00:00:00.000Z
-Stopped at: Phase 03 RAG implemented (not committed); next is live verify + user commit, then Phase 04 (Observability)
+Stopped at: Phase 05 MCP implemented (not committed); next is live deploy smoke + SC1/SC2/SC3 verify + user commit
 Resume file: None

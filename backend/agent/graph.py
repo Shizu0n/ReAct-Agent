@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 from langgraph.store.base import BaseStore
 
@@ -359,10 +360,12 @@ def _create_default_llm(tracker: UsageTracker | None = None) -> Any:
     )
 
 
-def agent_node(state: AgentState, llm: Any) -> dict[str, Any]:
+def agent_node(
+    state: AgentState, llm: Any, extra_schemas: list[dict] | None = None
+) -> dict[str, Any]:
     messages = state.get("messages", [])
     prompt_messages = [SystemMessage(content=_runtime_system_prompt()), *messages]
-    response = llm.invoke(prompt_messages, tools=TOOL_SCHEMAS)
+    response = llm.invoke(prompt_messages, tools=TOOL_SCHEMAS + (extra_schemas or []))
     if not isinstance(response, AIMessage):
         response = AIMessage(content=str(getattr(response, "content", response)))
 
@@ -488,7 +491,54 @@ def _normalize_tool_input(action: str, action_input: str) -> str:
     return action_input
 
 
-async def tool_node(state: AgentState, store: BaseStore, config: RunnableConfig, pool=None) -> dict[str, Any]:
+_NATIVE_TOOL_NAMES = set(TOOLS) | {
+    MEMORY_READ_TOOL_NAME,
+    MEMORY_WRITE_TOOL_NAME,
+    DOCUMENT_SEARCH_TOOL_NAME,
+}
+
+
+def _filter_mcp_tools(
+    tools: list[BaseTool], schemas: list[dict]
+) -> tuple[dict[str, BaseTool], list[dict]]:
+    """Map discovered MCP tools by name, dropping any whose name collides with a
+    native tool so an MCP tool can never shadow calculator/web_search/etc. The
+    returned schema list stays index-aligned with the surviving tools."""
+    tool_map: dict[str, BaseTool] = {}
+    active_schemas: list[dict] = []
+    for tool, schema in zip(tools, schemas):
+        if tool.name in _NATIVE_TOOL_NAMES:
+            continue
+        tool_map[tool.name] = tool
+        active_schemas.append(schema)
+    return tool_map, active_schemas
+
+
+def _mcp_result_to_text(result: Any) -> str:
+    """Flatten an MCP tool result to a plain observation string. langchain-mcp-adapters
+    tools return content blocks (a list of {'type': 'text', 'text': ...} dicts), not a
+    bare string; extract the text so an MCP observation reads identically to a native
+    tool's (SC2 trace parity)."""
+    if isinstance(result, str):
+        return result
+    if isinstance(result, list):
+        parts = [
+            str(block["text"])
+            for block in result
+            if isinstance(block, dict) and block.get("text") is not None
+        ]
+        if parts:
+            return "\n".join(parts)
+    return str(result)
+
+
+async def tool_node(
+    state: AgentState,
+    store: BaseStore,
+    config: RunnableConfig,
+    pool=None,
+    mcp_tools: dict[str, BaseTool] | None = None,
+) -> dict[str, Any]:
     messages = state.get("messages", [])
     last_ai = _last_ai_message(messages)
     tool_calls = list(last_ai.tool_calls) if last_ai and last_ai.tool_calls else []
@@ -516,6 +566,15 @@ async def tool_node(state: AgentState, store: BaseStore, config: RunnableConfig,
                 observation = "Document search is unavailable in this session."
             else:
                 observation = await _run_document_search(pool, session_id, action_input)
+        elif mcp_tools and action in mcp_tools:
+            # MCP tools may be multi-arg: pass the FULL raw args dict to .ainvoke(),
+            # not the flattened action_input display string.
+            try:
+                observation = _mcp_result_to_text(
+                    await mcp_tools[action].ainvoke(call.get("args", {}) or {})
+                )
+            except Exception as exc:
+                observation = f"Error: {type(exc).__name__}: {exc}"
         else:
             observation = _run_tool(action, action_input)
         _elapsed_ms = round((time.perf_counter() - _step_started) * 1000)
@@ -551,15 +610,16 @@ def should_continue(state: AgentState) -> str:
     return "tools" if last_ai and last_ai.tool_calls else "end"
 
 
-def build_graph(llm: Any | None = None, tracker: UsageTracker | None = None, checkpointer=None, store=None, pool=None):
+def build_graph(llm: Any | None = None, tracker: UsageTracker | None = None, checkpointer=None, store=None, pool=None, mcp_tools=None, mcp_schemas=None):
     active_llm = llm or _create_default_llm(tracker)
     if tracker is not None:
         active_llm = UsageTrackingLLM(active_llm, tracker)
+    _mcp_map, _active_mcp_schemas = _filter_mcp_tools(mcp_tools or [], mcp_schemas or [])
     workflow = StateGraph(AgentState)
-    workflow.add_node("agent_node", lambda state: agent_node(state, active_llm))  # type: ignore
+    workflow.add_node("agent_node", lambda state: agent_node(state, active_llm, extra_schemas=_active_mcp_schemas))  # type: ignore
 
     async def _tool_node(state: AgentState, store: BaseStore, config: RunnableConfig) -> dict[str, Any]:
-        return await tool_node(state, store, config, pool=pool)
+        return await tool_node(state, store, config, pool=pool, mcp_tools=_mcp_map)
 
     workflow.add_node("tool_node", _tool_node)
     workflow.add_edge(START, "agent_node")
