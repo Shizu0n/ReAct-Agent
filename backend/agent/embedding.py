@@ -31,7 +31,7 @@ async def embed_batch(texts: list[str], api_key: str) -> list[list[float]]:
             {
                 "model": "models/gemini-embedding-001",
                 "content": {"parts": [{"text": text}]},
-                "embedContentConfig": {"outputDimensionality": EMBED_DIM},
+                "outputDimensionality": EMBED_DIM,
             }
             for text in texts
         ]
