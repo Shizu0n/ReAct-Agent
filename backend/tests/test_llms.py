@@ -246,5 +246,65 @@ class LlmSelectionTests(unittest.TestCase):
         self.assertIn("HTTP 403", message)
 
 
+class FallbackEventTests(unittest.TestCase):
+    def test_records_redacted_fallback_event_on_recovery(self):
+        from agent.llms import FreeModelFallback, FreeProvider, UsageTracker
+
+        secret = "sk-SECRET123"
+
+        def failing(messages, tools=None):
+            raise RuntimeError(f"boom {secret}")
+
+        def succeeding(messages, tools=None):
+            return AIMessage(content="recovered answer")
+
+        tracker = UsageTracker()
+        # GEMINI_API_KEY carries a secret marker, so redact_secrets scrubs its value.
+        with patch.dict(os.environ, {"GEMINI_API_KEY": secret}, clear=True):
+            fallback = FreeModelFallback(
+                [FreeProvider("gemini", failing), FreeProvider("groq", succeeding)],
+                tracker=tracker,
+            )
+            result = fallback.invoke([HumanMessage(content="hello")])
+
+        self.assertEqual(result.content, "recovered answer")
+        events = tracker.summary()["fallback_events"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["provider"], "gemini")
+        self.assertNotIn(secret, events[0]["error"])
+
+    def test_no_fallback_when_first_succeeds(self):
+        from agent.llms import FreeModelFallback, FreeProvider, UsageTracker
+
+        def succeeding(messages, tools=None):
+            return AIMessage(content="ok")
+
+        tracker = UsageTracker()
+        fallback = FreeModelFallback(
+            [FreeProvider("gemini", succeeding)], tracker=tracker
+        )
+        fallback.invoke([HumanMessage(content="hello")])
+
+        self.assertEqual(tracker.summary()["fallback_events"], [])
+
+    def test_all_fail_still_raises(self):
+        from agent.llms import FreeModelFallback, FreeProvider, UsageTracker
+
+        def failing(messages, tools=None):
+            raise RuntimeError("down")
+
+        tracker = UsageTracker()
+        fallback = FreeModelFallback(
+            [FreeProvider("gemini", failing), FreeProvider("groq", failing)],
+            tracker=tracker,
+        )
+        with self.assertRaises(RuntimeError) as context:
+            fallback.invoke([HumanMessage(content="hello")])
+
+        self.assertTrue(
+            str(context.exception).startswith("All free model providers failed:")
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

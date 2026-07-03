@@ -54,7 +54,7 @@ class DocumentSearchStepTests(unittest.TestCase):
         step = result["intermediate_steps"][-1]
         self.assertEqual(
             set(step.keys()),
-            {"thought", "action", "action_input", "observation", "timestamp"},
+            {"thought", "action", "action_input", "observation", "timestamp", "elapsed_ms"},
         )
         self.assertEqual(step["action"], "document_search")
 

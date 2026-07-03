@@ -216,7 +216,7 @@ class DegradedStoreTests(unittest.TestCase):
         # Step must still have all required keys.
         self.assertEqual(
             set(step.keys()),
-            {"thought", "action", "action_input", "observation", "timestamp"},
+            {"thought", "action", "action_input", "observation", "timestamp", "elapsed_ms"},
         )
 
     def test_memory_write_with_none_store_via_tool_node(self):
@@ -244,7 +244,7 @@ class DegradedStoreTests(unittest.TestCase):
         self.assertIn("unavailable", step["observation"].lower())
         self.assertEqual(
             set(step.keys()),
-            {"thought", "action", "action_input", "observation", "timestamp"},
+            {"thought", "action", "action_input", "observation", "timestamp", "elapsed_ms"},
         )
 
 

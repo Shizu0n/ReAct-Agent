@@ -29,6 +29,7 @@ from agent.llms import UsageTracker, configured_model_info, responder_provider
 from agent.redaction import configure_secure_logging
 from agent.state import MaxIterationsError
 from agent.suggestions import generate_suggestions
+from agent.traces import _response_from_row, fetch_runs, fetch_trace, persist_trace
 
 # Load backend/.env before configuring redaction (so secret values are registered
 # for scrubbing) and before the lifespan opens the DB pool. On Vercel the env vars
@@ -103,6 +104,20 @@ class DocumentInfo(BaseModel):
 
 class DocumentListResponse(BaseModel):
     documents: list[DocumentInfo]
+
+
+class RunListItem(BaseModel):
+    run_id: str
+    query: str
+    status: str
+    elapsed_ms: int
+    created_at: str
+    provider: str
+    has_fallback: bool
+
+
+class RunListResponse(BaseModel):
+    runs: list[RunListItem]
 
 
 RUNS: dict[str, AgentResponse] = {}
@@ -288,13 +303,18 @@ async def _run_agent(
     tracker = UsageTracker()
     graph = build_graph(tracker=tracker, checkpointer=checkpointer, store=store, pool=pool)
     use_checkpointer = checkpointer is not None
-    config = _graph_config(session_id or str(uuid.uuid4()))
+    thread_id = session_id or str(uuid.uuid4())
+    config = _graph_config(thread_id)
     final_state = await graph.ainvoke(
         _initial_state(query, history, use_checkpointer=use_checkpointer),
         config=config,
     )
     response = _build_response(run_id, started_at, final_state, tracker.summary())
     _store_response(response)
+    try:
+        await persist_trace(pool, run_id, thread_id, query, response)
+    except Exception:
+        logger.exception("trace persist failed for run %s", run_id)
     return response
 
 
@@ -353,7 +373,8 @@ async def _stream_agent(
     tracker = UsageTracker()
     use_checkpointer = checkpointer is not None
     initial_state = _initial_state(query, history, use_checkpointer=use_checkpointer)
-    config = _graph_config(session_id or str(uuid.uuid4()))
+    thread_id = session_id or str(uuid.uuid4())
+    config = _graph_config(thread_id)
     final_state = initial_state
 
     try:
@@ -437,6 +458,10 @@ async def _stream_agent(
         status="success",
         usage=response.usage,
     )
+    try:
+        await persist_trace(pool, run_id, thread_id, query, response)
+    except Exception:
+        logger.exception("trace persist failed for run %s", run_id)
 
 
 async def _sse_response(iterator: AsyncIterator[dict[str, str]]) -> StreamingResponse:
@@ -570,9 +595,49 @@ async def evals() -> dict[str, Any]:
     return {"status": "unavailable"}
 
 
+@limiter.exempt
+@app.get("/runs", response_model=RunListResponse)
+@app.get("/api/runs", response_model=RunListResponse)
+async def list_runs(request: Request) -> RunListResponse:
+    """Session-scoped run history (thread_id from X-Session-Id), newest first.
+    Exempt from the rate limit: reads are cheap and a turn already spends its
+    limited call on /run. Degrades to an empty list when the pool is None."""
+    pool = getattr(request.app.state, "pool", None)
+    if pool is None:
+        return RunListResponse(runs=[])
+    session_id = _get_session_id(request)
+    rows = await fetch_runs(pool, session_id)
+    items = []
+    for row in rows:
+        usage = row.get("usage") or {}
+        providers = usage.get("providers") or []
+        created_at = row.get("created_at")
+        items.append(
+            RunListItem(
+                run_id=row["run_id"],
+                query=row.get("query") or "",
+                status=row.get("status") or "",
+                elapsed_ms=row.get("elapsed_ms") or 0,
+                created_at=created_at.isoformat()
+                if hasattr(created_at, "isoformat")
+                else str(created_at or ""),
+                provider=providers[0] if providers else "",
+                has_fallback=bool(usage.get("fallback_events")),
+            )
+        )
+    return RunListResponse(runs=items)
+
+
+@limiter.exempt
 @app.get("/trace/{run_id}", response_model=AgentResponse)
 @app.get("/api/trace/{run_id}", response_model=AgentResponse)
-async def get_trace(run_id: str) -> AgentResponse:
+async def get_trace(run_id: str, request: Request) -> AgentResponse:
+    pool = getattr(request.app.state, "pool", None)
+    session_id = _get_session_id(request)
+    if pool is not None:
+        row = await fetch_trace(pool, run_id, session_id)
+        if row is not None:
+            return _response_from_row(row)
     response = RUNS.get(run_id)
     if response is None:
         raise HTTPException(status_code=404, detail="Run not found")

@@ -621,7 +621,7 @@ class MemoryToolStepTests(unittest.TestCase):
 
         self.assertEqual(len(result["intermediate_steps"]), 1)
         step = result["intermediate_steps"][-1]
-        self.assertEqual(set(step.keys()), {"thought", "action", "action_input", "observation", "timestamp"})
+        self.assertEqual(set(step.keys()), {"thought", "action", "action_input", "observation", "timestamp", "elapsed_ms"})
         self.assertEqual(step["action"], MEMORY_READ_TOOL_NAME)
         self.assertEqual(step["action_input"], "recall preferences")
 
@@ -638,7 +638,7 @@ class MemoryToolStepTests(unittest.TestCase):
 
         self.assertEqual(len(result["intermediate_steps"]), 1)
         step = result["intermediate_steps"][-1]
-        self.assertEqual(set(step.keys()), {"thought", "action", "action_input", "observation", "timestamp"})
+        self.assertEqual(set(step.keys()), {"thought", "action", "action_input", "observation", "timestamp", "elapsed_ms"})
         self.assertEqual(step["action"], MEMORY_WRITE_TOOL_NAME)
         self.assertEqual(step["action_input"], "I live in Sao Paulo")
 

@@ -35,27 +35,38 @@ class ModelInfo:
 
 
 class FreeModelFallback:
-    def __init__(self, providers: list[FreeProvider]):
+    def __init__(
+        self, providers: list[FreeProvider], tracker: UsageTracker | None = None
+    ):
         if not providers:
             raise RuntimeError(
                 "No free model provider configured. Set GEMINI_API_KEY, GROQ_API_KEY, "
                 "or GITHUB_MODELS_TOKEN + GITHUB_MODELS_MODEL."
             )
         self.providers = providers
+        self._tracker = tracker
 
     def invoke(
         self, messages: list[BaseMessage], tools: list[dict] | None = None
     ) -> AIMessage:
-        errors: list[str] = []
+        errors: list[dict[str, Any]] = []
         for provider in self.providers:
             try:
-                return provider.call(messages, tools)
+                result = provider.call(messages, tools)
             except Exception as exc:
                 errors.append(
-                    f"{provider.name}: {type(exc).__name__}: {_safe_exception_message(exc)}"
+                    {
+                        "provider": provider.name,
+                        "error": f"{type(exc).__name__}: {_safe_exception_message(exc)}",
+                    }
                 )
+                continue
+            if errors and self._tracker is not None:
+                self._tracker.record_fallback(errors)
+            return result
         raise RuntimeError(
-            "All free model providers failed: " + " | ".join(errors)
+            "All free model providers failed: "
+            + " | ".join(f"{e['provider']}: {e['error']}" for e in errors)
         ) from None
 
 
@@ -417,6 +428,10 @@ class UsageTracker:
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.fallback_events: list[dict[str, Any]] = []
+
+    def record_fallback(self, events: list[dict[str, Any]]) -> None:
+        self.fallback_events.extend(events)
 
     def record(self, message: AIMessage) -> None:
         usage = getattr(message, "usage_metadata", None) or {}
@@ -448,6 +463,7 @@ class UsageTracker:
             "providers": list(
                 dict.fromkeys(c["provider"] for c in self.calls if c["provider"])
             ),
+            "fallback_events": self.fallback_events,
         }
 
 

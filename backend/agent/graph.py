@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, cast
 from uuid import uuid4
@@ -351,9 +352,11 @@ def _forced_web_search_message(query: str, messages: list[BaseMessage]) -> AIMes
     )
 
 
-def _create_default_llm() -> Any:
+def _create_default_llm(tracker: UsageTracker | None = None) -> Any:
     load_model_environment()
-    return FreeModelFallback(providers_preferring(responder_provider()))
+    return FreeModelFallback(
+        providers_preferring(responder_provider()), tracker=tracker
+    )
 
 
 def agent_node(state: AgentState, llm: Any) -> dict[str, Any]:
@@ -497,6 +500,7 @@ async def tool_node(state: AgentState, store: BaseStore, config: RunnableConfig,
     for call in tool_calls:
         action = call.get("name", "")
         action_input = _normalize_tool_input(action, _tool_call_action_input(call))
+        _step_started = time.perf_counter()
         if action == MEMORY_READ_TOOL_NAME:
             if store is None:
                 observation = "Memory is unavailable in this session."
@@ -514,6 +518,7 @@ async def tool_node(state: AgentState, store: BaseStore, config: RunnableConfig,
                 observation = await _run_document_search(pool, session_id, action_input)
         else:
             observation = _run_tool(action, action_input)
+        _elapsed_ms = round((time.perf_counter() - _step_started) * 1000)
         new_messages.append(
             ToolMessage(content=observation, tool_call_id=call.get("id", action))
         )
@@ -524,6 +529,7 @@ async def tool_node(state: AgentState, store: BaseStore, config: RunnableConfig,
                 "action_input": action_input,
                 "observation": observation,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "elapsed_ms": _elapsed_ms,
             }
         )
 
@@ -546,7 +552,7 @@ def should_continue(state: AgentState) -> str:
 
 
 def build_graph(llm: Any | None = None, tracker: UsageTracker | None = None, checkpointer=None, store=None, pool=None):
-    active_llm = llm or _create_default_llm()
+    active_llm = llm or _create_default_llm(tracker)
     if tracker is not None:
         active_llm = UsageTrackingLLM(active_llm, tracker)
     workflow = StateGraph(AgentState)

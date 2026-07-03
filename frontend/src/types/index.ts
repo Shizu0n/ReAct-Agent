@@ -1,5 +1,10 @@
 export type StepType = 'thought' | 'action' | 'observation' | 'final'
 
+export interface FallbackEvent {
+  provider: string
+  error: string
+}
+
 export interface Usage {
   llm_calls: number
   input_tokens: number
@@ -7,6 +12,7 @@ export interface Usage {
   total_tokens: number
   estimated_cost_usd: number
   providers: string[]
+  fallback_events?: FallbackEvent[]
 }
 
 export interface Step {
@@ -51,6 +57,20 @@ export interface AgentResponse {
   latency_ms: number
   status: 'success' | 'error'
   usage?: Usage
+}
+
+export interface RunListItem {
+  run_id: string
+  query: string
+  status: 'success' | 'error'
+  elapsed_ms: number
+  created_at: string
+  provider: string
+  has_fallback: boolean
+}
+
+export interface RunListResponse {
+  runs: RunListItem[]
 }
 
 export interface Message {

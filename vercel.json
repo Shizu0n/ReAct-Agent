@@ -37,6 +37,7 @@
     { "source": "/config", "destination": "/api/index.py" },
     { "source": "/suggestions", "destination": "/api/index.py" },
     { "source": "/trace/:path*", "destination": "/api/index.py" },
+    { "source": "/runs", "destination": "/api/index.py" },
     { "source": "/keepalive", "destination": "/api/index.py" },
     { "source": "/memory/:path*", "destination": "/api/index.py" },
     { "source": "/upload", "destination": "/api/index.py" },

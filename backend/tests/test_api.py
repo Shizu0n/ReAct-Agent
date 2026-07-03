@@ -1,10 +1,24 @@
 import asyncio
 import os
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage
+
+
+def _stub_pool(fetchall_rows=None, fetchone_row=None):
+    """MagicMock async pool that records execute() calls and returns canned rows."""
+    cur = MagicMock()
+    cur.fetchall = AsyncMock(return_value=fetchall_rows or [])
+    cur.fetchone = AsyncMock(return_value=fetchone_row)
+    conn = MagicMock()
+    conn.execute = AsyncMock(return_value=cur)
+    pool = MagicMock()
+    pool.connection.return_value.__aenter__ = AsyncMock(return_value=conn)
+    pool.connection.return_value.__aexit__ = AsyncMock(return_value=False)
+    return pool, conn
 
 
 STEP = {
@@ -501,6 +515,161 @@ class ClearMemoryTests(unittest.TestCase):
         response = self.client.delete(f"/api/memory/{session_id}")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "cleared")
+
+
+class RunsEndpointTests(unittest.TestCase):
+    def setUp(self):
+        import api
+
+        self.api = api
+        api.RUNS.clear()
+        api.RUN_ORDER.clear()
+        self.client = TestClient(api.app)
+
+    def tearDown(self):
+        self.api.app.state.pool = None
+        self.api.RUNS.clear()
+        self.api.RUN_ORDER.clear()
+        self.client.close()
+
+    def test_runs_empty_when_no_pool(self):
+        self.api.app.state.pool = None
+        response = self.client.get("/runs")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"runs": []})
+
+    def test_runs_scoped_by_session(self):
+        session_id = "12345678-1234-1234-1234-123456789abc"
+        rows = [
+            {
+                "run_id": "r1",
+                "query": "first",
+                "status": "success",
+                "elapsed_ms": 120,
+                "usage": {"providers": ["gemini"], "fallback_events": []},
+                "created_at": datetime(2026, 7, 2, tzinfo=timezone.utc),
+            },
+            {
+                "run_id": "r2",
+                "query": "second",
+                "status": "success",
+                "elapsed_ms": 80,
+                "usage": {
+                    "providers": ["groq"],
+                    "fallback_events": [{"provider": "gemini", "error": "boom"}],
+                },
+                "created_at": datetime(2026, 7, 1, tzinfo=timezone.utc),
+            },
+        ]
+        pool, conn = _stub_pool(fetchall_rows=rows)
+        self.api.app.state.pool = pool
+
+        response = self.client.get("/runs", headers={"X-Session-Id": session_id})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual([r["run_id"] for r in body["runs"]], ["r1", "r2"])
+        self.assertEqual(body["runs"][0]["provider"], "gemini")
+        self.assertFalse(body["runs"][0]["has_fallback"])
+        self.assertTrue(body["runs"][1]["has_fallback"])
+        # The listing was scoped to the caller's session (thread_id).
+        sql = conn.execute.call_args.args[0]
+        params = conn.execute.call_args.args[1]
+        self.assertIn("WHERE thread_id = %s", sql)
+        self.assertIn(session_id, params)
+
+
+class TraceEndpointTests(unittest.TestCase):
+    def setUp(self):
+        import api
+
+        self.api = api
+        api.RUNS.clear()
+        api.RUN_ORDER.clear()
+        self.client = TestClient(api.app)
+
+    def tearDown(self):
+        self.api.app.state.pool = None
+        self.api.RUNS.clear()
+        self.api.RUN_ORDER.clear()
+        self.client.close()
+
+    def _db_row(self, run_id, answer):
+        return {
+            "run_id": run_id,
+            "thread_id": "t1",
+            "query": "q",
+            "steps": [
+                {
+                    "thought": "t",
+                    "action": "calculator",
+                    "action_input": "1 + 1",
+                    "observation": "2",
+                    "timestamp": "2026-07-02T00:00:00+00:00",
+                    "elapsed_ms": 3,
+                }
+            ],
+            "final_answer": answer,
+            "status": "success",
+            "usage": {"providers": ["gemini"]},
+            "elapsed_ms": 4200,
+        }
+
+    def _memory_response(self, run_id, answer):
+        return self.api.AgentResponse(
+            result=answer,
+            trace=[],
+            total_time=0.0,
+            run_id=run_id,
+            answer=answer,
+            steps=[],
+            tools_used=[],
+            latency_ms=0,
+            status="success",
+            usage={},
+        )
+
+    def test_trace_db_first(self):
+        run_id = "run-db"
+        session_id = "12345678-1234-1234-1234-123456789abc"
+        pool, conn = _stub_pool(
+            fetchone_row=self._db_row(run_id=run_id, answer="from-db")
+        )
+        self.api.app.state.pool = pool
+        # In-memory holds a different answer; the DB row must win.
+        self.api.RUNS[run_id] = self._memory_response(run_id=run_id, answer="from-memory")
+
+        response = self.client.get(
+            f"/trace/{run_id}", headers={"X-Session-Id": session_id}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["result"], "from-db")
+        self.assertEqual(body["run_id"], run_id)
+        self.assertEqual(body["steps"][0]["elapsed_ms"], 3)
+        # The DB lookup is scoped to the caller's session (T-4-05 hardening).
+        self.assertEqual(conn.execute.call_args.args[1], (run_id, session_id))
+
+    def test_trace_memory_fallback(self):
+        run_id = "run-mem"
+        pool, _conn = _stub_pool(fetchone_row=None)  # DB miss
+        self.api.app.state.pool = pool
+        self.api.RUNS[run_id] = self._memory_response(run_id=run_id, answer="from-memory")
+
+        response = self.client.get(f"/trace/{run_id}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["result"], "from-memory")
+
+    def test_trace_404(self):
+        pool, _conn = _stub_pool(fetchone_row=None)
+        self.api.app.state.pool = pool
+
+        response = self.client.get("/trace/does-not-exist")
+
+        self.assertEqual(response.status_code, 404)
 
 
 if __name__ == "__main__":

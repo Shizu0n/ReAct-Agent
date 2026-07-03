@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
-import { Code2, ExternalLink, Info, Menu, X } from 'lucide-react'
+import { Code2, ExternalLink, History, Info, Menu, X } from 'lucide-react'
 import { ChatWorkspace } from './components/ChatWorkspace'
 import { PortfolioView } from './components/PortfolioView'
 import { ProjectMark } from './components/ProjectMark'
+import { RunHistory } from './components/RunHistory'
 import { useAgent } from './hooks/useAgent'
 
 const LEFT_SIDEBAR_MIN = 220
@@ -13,6 +14,7 @@ const RIGHT_SIDEBAR_DEFAULT = 400
 
 const navItems = [
   { id: 'chat', label: 'Chat', icon: ProjectMark },
+  { id: 'history', label: 'History', icon: History },
   { id: 'portfolio', label: 'About', icon: Info },
 ] as const
 
@@ -226,6 +228,8 @@ function App() {
             onReasoningStart={handleReasoningStart}
             onOpenPortfolio={() => switchTab('portfolio')}
           />
+        ) : activeTab === 'history' ? (
+          <RunHistory sessionId={sessionId} />
         ) : (
           <PortfolioView onOpenChat={() => switchTab('chat')} />
         )}
