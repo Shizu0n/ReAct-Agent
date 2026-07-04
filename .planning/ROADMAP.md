@@ -13,9 +13,9 @@ reliability thinking, which is the core recruiter-facing signal.
 
 - [x] **Phase 1: Foundation** — Supabase persistence backbone, DB schema, keep-alive cron, LangGraph upgrade
 - [x] **Phase 2: Memory** — Cross-session conversation history and long-term fact recall with visible trace steps
-- [ ] **Phase 3: RAG** — Document upload, rate-limit-safe ingestion pipeline, pgvector retrieval, cited answers
-- [ ] **Phase 4: Observability** — Persistent trace history, per-step dashboard, provider and fallback display
-- [ ] **Phase 5: MCP** — Companion MCP server, dynamic tool discovery via `tools/list`, env-var toggle
+- [x] **Phase 3: RAG** — Document upload, rate-limit-safe ingestion pipeline, pgvector retrieval, cited answers
+- [x] **Phase 4: Observability** — Persistent trace history, per-step dashboard, provider and fallback display
+- [x] **Phase 5: MCP** — Companion MCP server, dynamic tool discovery via `tools/list`, env-var toggle
 
 ## Phase Details
 
@@ -150,6 +150,6 @@ reliability thinking, which is the core recruiter-facing signal.
 |-------|----------------|--------|-----------|
 | 1. Foundation | 4/4 | ✓ Complete | 2026-06-29 |
 | 2. Memory | 4/4 | ✓ Complete | 2026-07-01 |
-| 3. RAG | 4/4 | Implemented (tests green); live verify pending | 2026-07-02 |
-| 4. Observability | 0/? | Not started | - |
-| 5. MCP | 4/4 | Implemented (146 tests green); live deploy verify + commit pending | 2026-07-03 |
+| 3. RAG | 4/4 | ✓ Complete (live-verified 2026-07-04) | 2026-07-02 |
+| 4. Observability | 3/3 | ✓ Complete (committed 3444ad0) | 2026-07-03 |
+| 5. MCP | 4/4 | ✓ Complete (committed 140d102) | 2026-07-03 |

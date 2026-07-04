@@ -3,6 +3,7 @@ import type {
   AgentConfig,
   AgentResponse,
   AgentState,
+  ConversationEntry,
   Message,
   RunSummary,
   Step,
@@ -21,7 +22,9 @@ type PersistedAgentSession = Pick<AgentState, 'messages' | 'steps' | 'runSummary
 
 const sessionStorageKey = 'react-agent:chat-session:v1'
 const SESSION_ID_KEY = 'react-agent:session-id'
+const THREAD_ID_KEY = 'react-agent:thread-id'
 
+// Stable browser identity: scopes long-term memory, documents, and run history.
 function getOrCreateSessionId(): string {
   if (typeof window === 'undefined') return ''
   const existing = window.localStorage.getItem(SESSION_ID_KEY)
@@ -29,6 +32,22 @@ function getOrCreateSessionId(): string {
   const id = crypto.randomUUID()
   window.localStorage.setItem(SESSION_ID_KEY, id)
   return id
+}
+
+// Per-conversation id: scopes the checkpointer thread. Defaults to the session
+// id so conversations that predate threads keep their server-side checkpoint.
+function getOrCreateThreadId(): string {
+  if (typeof window === 'undefined') return ''
+  const existing = window.localStorage.getItem(THREAD_ID_KEY)
+  if (existing) return existing
+  const id = getOrCreateSessionId()
+  window.localStorage.setItem(THREAD_ID_KEY, id)
+  return id
+}
+
+function setThreadId(threadId: string): void {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(THREAD_ID_KEY, threadId)
 }
 
 // Generic client-side fallback when the suggestions endpoint is unreachable.
@@ -553,6 +572,7 @@ export function useAgent() {
         headers: {
           'Content-Type': 'application/json',
           'X-Session-Id': getOrCreateSessionId(),
+          'X-Thread-Id': getOrCreateThreadId(),
         },
         body: JSON.stringify({ query, stream: true, history: historyForApi(history) }),
       })
@@ -638,6 +658,55 @@ export function useAgent() {
     void runApi(trimmedQuery, assistantId, state.messages)
   }
 
+  function newChat(): void {
+    if (state.isLoading) return
+
+    // Fresh conversation thread; the user identity (memory, documents, run
+    // history) is untouched — that persistence is the point of the demo.
+    setThreadId(crypto.randomUUID())
+    setState((current) => ({
+      ...current,
+      messages: [],
+      steps: [],
+      error: null,
+      runSummary: null,
+      suggestions: [],
+    }))
+  }
+
+  function restoreConversation(entries: ConversationEntry[], threadId?: string): void {
+    if (state.isLoading || entries.length === 0) return
+
+    // Continue on the original conversation's thread so the server-side
+    // checkpoint context resumes along with the visible transcript.
+    if (threadId) setThreadId(threadId)
+
+    const messages = entries.flatMap((entry) => [
+      makeUserMessage(entry.query),
+      {
+        id: crypto.randomUUID(),
+        role: 'assistant' as const,
+        content: entry.response.answer || entry.response.result,
+      },
+    ])
+    const last = entries[entries.length - 1].response
+
+    setState((current) => ({
+      ...current,
+      messages,
+      steps: apiResponseToTimelineSteps(last),
+      error: null,
+      suggestions: [],
+      runSummary: {
+        run_id: last.run_id,
+        elapsed_ms: last.latency_ms,
+        tools_used: last.tools_used,
+        status: last.status,
+        usage: last.usage,
+      },
+    }))
+  }
+
   function clearHistory(): void {
     if (state.isLoading) return
 
@@ -658,5 +727,5 @@ export function useAgent() {
   }
 
   const sessionId = getOrCreateSessionId()
-  return { state, sendQuery, clearHistory, sessionId }
+  return { state, sendQuery, clearHistory, restoreConversation, newChat, sessionId }
 }

@@ -59,8 +59,14 @@ export interface AgentResponse {
   usage?: Usage
 }
 
+export interface ConversationEntry {
+  query: string
+  response: AgentResponse
+}
+
 export interface RunListItem {
   run_id: string
+  thread_id: string
   query: string
   status: 'success' | 'error'
   elapsed_ms: number
@@ -125,10 +131,4 @@ export interface UploadResult {
   chunks_stored: number
   chunks_skipped: number
   doc_id: string
-}
-
-export interface DocumentState {
-  documents: DocumentInfo[]
-  uploading: boolean
-  error: string | null
 }

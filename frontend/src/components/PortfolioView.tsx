@@ -1,3 +1,4 @@
+import { CapabilitiesSection } from './CapabilitiesSection'
 import { EvalsSection } from './EvalsSection'
 import { HeroSection } from './HeroSection'
 import { HowItWorksSection } from './HowItWorksSection'
@@ -13,6 +14,7 @@ export function PortfolioView({ onOpenChat }: PortfolioViewProps) {
     <div className="min-h-screen bg-[var(--bg-primary)]">
       <HeroSection onOpenChat={onOpenChat} />
       <HowItWorksSection />
+      <CapabilitiesSection />
       <EvalsSection />
       <StackSection />
       <PageFooter />

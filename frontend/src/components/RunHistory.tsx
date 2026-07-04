@@ -1,13 +1,47 @@
-import { Clock, RotateCw, Search, Terminal, Timer, Wrench } from 'lucide-react'
+import { useState } from 'react'
+import { Clock, LoaderCircle, MessageSquare, RotateCw, Search, Terminal, Timer, Wrench } from 'lucide-react'
 import { useRunHistory } from '../hooks/useRunHistory'
-import type { AgentResponse, RunListItem, Step } from '../types'
+import type { AgentResponse, ConversationEntry, RunListItem, Step } from '../types'
 
 type RunHistoryProps = {
   sessionId: string
+  onOpenInChat?: (entries: ConversationEntry[], threadId: string) => void
 }
 
-export function RunHistory({ sessionId }: RunHistoryProps) {
-  const { runs, listState, selected, detailState, selectRun, refresh } = useRunHistory(sessionId)
+type ConversationGroup = {
+  threadId: string
+  runs: RunListItem[]
+}
+
+// Runs arrive newest-first, so Map insertion order keeps groups newest-first.
+function groupByThread(runs: RunListItem[]): ConversationGroup[] {
+  const groups = new Map<string, RunListItem[]>()
+  for (const run of runs) {
+    const key = run.thread_id || 'legacy'
+    const list = groups.get(key)
+    if (list) {
+      list.push(run)
+    } else {
+      groups.set(key, [run])
+    }
+  }
+  return [...groups.entries()].map(([threadId, threadRuns]) => ({ threadId, runs: threadRuns }))
+}
+
+export function RunHistory({ sessionId, onOpenInChat }: RunHistoryProps) {
+  const { runs, listState, selected, detailState, selectRun, refresh, loadConversation } = useRunHistory(sessionId)
+  const [restoringThread, setRestoringThread] = useState<string | null>(null)
+
+  async function handleOpenInChat(threadId: string): Promise<void> {
+    if (restoringThread !== null || !onOpenInChat) return
+    setRestoringThread(threadId)
+    try {
+      const entries = await loadConversation(threadId)
+      if (entries.length > 0) onOpenInChat(entries, threadId)
+    } finally {
+      setRestoringThread(null)
+    }
+  }
 
   return (
     <div className="mx-auto flex min-h-screen max-w-[1200px] flex-col px-[clamp(1.25rem,4vw,3rem)] py-[8vh]">
@@ -20,8 +54,9 @@ export function RunHistory({ sessionId }: RunHistoryProps) {
             Run history
           </h2>
           <p className="mt-4 max-w-[620px] text-[0.9rem] leading-[1.7] text-[var(--text-secondary)]">
-            Every run this session is persisted with its full reasoning trace, per-step timing, and any
-            provider fallbacks. Pick a run to inspect how the agent reached its answer.
+            Every conversation is persisted with its full reasoning traces, per-step timing, and any
+            provider fallbacks. Pick a run to inspect how the agent reached its answer, or reopen a
+            conversation back in Chat.
           </p>
         </div>
         <button
@@ -43,6 +78,8 @@ export function RunHistory({ sessionId }: RunHistoryProps) {
             selected={selected}
             onSelect={selectRun}
             onRetry={refresh}
+            restoringThread={restoringThread}
+            onOpenInChat={onOpenInChat ? (threadId) => void handleOpenInChat(threadId) : undefined}
           />
         </div>
         <div className="min-w-0">
@@ -59,12 +96,16 @@ function RunList({
   selected,
   onSelect,
   onRetry,
+  restoringThread,
+  onOpenInChat,
 }: {
   state: ReturnType<typeof useRunHistory>['listState']
   runs: RunListItem[]
   selected: string | null
   onSelect: (runId: string) => void
   onRetry: () => void
+  restoringThread: string | null
+  onOpenInChat?: (threadId: string) => void
 }) {
   if (state === 'loading') {
     return <PanelNote>Loading runs…</PanelNote>
@@ -105,11 +146,71 @@ function RunList({
   }
 
   return (
-    <div className="max-h-[70vh] space-y-2 overflow-y-auto pr-1">
-      {runs.map((run) => (
-        <RunRow key={run.run_id} run={run} active={run.run_id === selected} onSelect={onSelect} />
+    <div className="max-h-[70vh] space-y-4 overflow-y-auto pr-1">
+      {groupByThread(runs).map((group) => (
+        <ConversationCard
+          key={group.threadId}
+          group={group}
+          selected={selected}
+          restoring={restoringThread === group.threadId}
+          anyRestoring={restoringThread !== null}
+          onSelect={onSelect}
+          onOpenInChat={onOpenInChat}
+        />
       ))}
     </div>
+  )
+}
+
+function ConversationCard({
+  group,
+  selected,
+  restoring,
+  anyRestoring,
+  onSelect,
+  onOpenInChat,
+}: {
+  group: ConversationGroup
+  selected: string | null
+  restoring: boolean
+  anyRestoring: boolean
+  onSelect: (runId: string) => void
+  onOpenInChat?: (threadId: string) => void
+}) {
+  // Newest-first within the group; the oldest run opened the conversation.
+  const firstRun = group.runs[group.runs.length - 1]
+  const latestRun = group.runs[0]
+
+  return (
+    <section className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/60 p-2">
+      <div className="flex items-start justify-between gap-3 px-2 pb-2 pt-1.5">
+        <div className="min-w-0">
+          <p className="truncate text-[0.8rem] font-medium text-[var(--text-primary)]" title={firstRun.query}>
+            {firstRun.query || 'Untitled conversation'}
+          </p>
+          <p className="mt-0.5 font-mono text-[0.6rem] uppercase tracking-[0.1em] text-[var(--text-tertiary)]">
+            {group.runs.length} run{group.runs.length === 1 ? '' : 's'} · {formatDate(latestRun.created_at)}
+          </p>
+        </div>
+        {onOpenInChat ? (
+          <button
+            type="button"
+            onClick={() => onOpenInChat(group.threadId)}
+            disabled={anyRestoring}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--accent-border)] bg-[var(--bg-elevated)] px-2.5 py-1.5 font-mono text-[0.6rem] uppercase tracking-[0.1em] text-[var(--accent-text)] transition hover:bg-[var(--bg-tertiary)] disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label="Open this conversation in chat"
+          >
+            {restoring ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <MessageSquare className="h-3 w-3" />}
+            {restoring ? 'Loading…' : 'Open in chat'}
+          </button>
+        ) : null}
+      </div>
+      <div className="space-y-2">
+        {group.runs.map((run) => (
+          <RunRow key={run.run_id} run={run} active={run.run_id === selected} onSelect={onSelect} />
+        ))}
+      </div>
+    </section>
   )
 }
 

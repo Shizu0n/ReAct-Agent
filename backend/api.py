@@ -24,7 +24,14 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
-from agent.graph import MEMORY_NAMESPACE_PREFIX, TOOLS, build_graph
+from agent.graph import (
+    DOCUMENT_SEARCH_TOOL_NAME,
+    MEMORY_NAMESPACE_PREFIX,
+    MEMORY_READ_TOOL_NAME,
+    MEMORY_WRITE_TOOL_NAME,
+    TOOLS,
+    build_graph,
+)
 from agent.llms import UsageTracker, configured_model_info, responder_provider
 from agent.mcp_client import discover_mcp_tools
 from agent.mcp_server import mcp_server
@@ -110,6 +117,7 @@ class DocumentListResponse(BaseModel):
 
 class RunListItem(BaseModel):
     run_id: str
+    thread_id: str = ""
     query: str
     status: str
     elapsed_ms: int
@@ -267,8 +275,17 @@ def _get_session_id(request: Request) -> str:
     return value if _is_valid_session_id(value) else str(uuid.uuid4())
 
 
-def _graph_config(session_id: str) -> dict:
-    return {"configurable": {"thread_id": session_id}}
+def _get_thread_id(request: Request, session_id: str) -> str:
+    """Per-conversation id from X-Thread-Id. Falls back to the session (user)
+    id so clients that predate threads keep their single-conversation behavior."""
+    value = request.headers.get("x-thread-id", "").strip()
+    return value if _is_valid_session_id(value) else session_id
+
+
+def _graph_config(thread_id: str, user_id: str | None = None) -> dict:
+    """thread_id keys the checkpointer (short-term, per conversation);
+    user_id keys long-term memory and documents (stable per browser)."""
+    return {"configurable": {"thread_id": thread_id, "user_id": user_id or thread_id}}
 
 
 def _store_response(response: AgentResponse) -> None:
@@ -324,6 +341,7 @@ async def _run_agent(
     started_at: float,
     history: list[ChatMessageRequest] | None = None,
     session_id: str | None = None,
+    thread_id: str | None = None,
     checkpointer=None,
     store=None,
     pool=None,
@@ -336,8 +354,9 @@ async def _run_agent(
         mcp_tools=mcp_tools, mcp_schemas=mcp_schemas,
     )
     use_checkpointer = checkpointer is not None
-    thread_id = session_id or str(uuid.uuid4())
-    config = _graph_config(thread_id)
+    user_id = session_id or str(uuid.uuid4())
+    thread = thread_id or user_id
+    config = _graph_config(thread, user_id)
     final_state = await graph.ainvoke(
         _initial_state(query, history, use_checkpointer=use_checkpointer),
         config=config,
@@ -345,7 +364,7 @@ async def _run_agent(
     response = _build_response(run_id, started_at, final_state, tracker.summary())
     _store_response(response)
     try:
-        await persist_trace(pool, run_id, thread_id, query, response)
+        await persist_trace(pool, run_id, thread, user_id, query, response)
     except Exception:
         logger.exception("trace persist failed for run %s", run_id)
     return response
@@ -398,6 +417,7 @@ async def _stream_agent(
     started_at: float,
     history: list[ChatMessageRequest] | None = None,
     session_id: str | None = None,
+    thread_id: str | None = None,
     checkpointer=None,
     store=None,
     pool=None,
@@ -408,8 +428,9 @@ async def _stream_agent(
     tracker = UsageTracker()
     use_checkpointer = checkpointer is not None
     initial_state = _initial_state(query, history, use_checkpointer=use_checkpointer)
-    thread_id = session_id or str(uuid.uuid4())
-    config = _graph_config(thread_id)
+    user_id = session_id or str(uuid.uuid4())
+    thread = thread_id or user_id
+    config = _graph_config(thread, user_id)
     final_state = initial_state
 
     try:
@@ -497,7 +518,7 @@ async def _stream_agent(
         usage=response.usage,
     )
     try:
-        await persist_trace(pool, run_id, thread_id, query, response)
+        await persist_trace(pool, run_id, thread, user_id, query, response)
     except Exception:
         logger.exception("trace persist failed for run %s", run_id)
 
@@ -522,6 +543,7 @@ async def run_agent(request: Request, payload: QueryRequest):
     run_id = uuid.uuid4().hex
     started_at = time.perf_counter()
     session_id = _get_session_id(request)
+    thread_id = _get_thread_id(request, session_id)
     checkpointer = getattr(request.app.state, "checkpointer", None)
     store = getattr(request.app.state, "store", None)
     pool = getattr(request.app.state, "pool", None)
@@ -531,13 +553,15 @@ async def run_agent(request: Request, payload: QueryRequest):
         return await _sse_response(
             _stream_agent(
                 payload.query, run_id, started_at, payload.history,
-                session_id=session_id, checkpointer=checkpointer, store=store, pool=pool,
+                session_id=session_id, thread_id=thread_id,
+                checkpointer=checkpointer, store=store, pool=pool,
                 mcp_tools=mcp_tools, mcp_schemas=mcp_schemas,
             )
         )
     return await _run_agent(
         payload.query, run_id, started_at, payload.history,
-        session_id=session_id, checkpointer=checkpointer, store=store, pool=pool,
+        session_id=session_id, thread_id=thread_id,
+        checkpointer=checkpointer, store=store, pool=pool,
         mcp_tools=mcp_tools, mcp_schemas=mcp_schemas,
     )
 
@@ -548,6 +572,7 @@ async def stream_agent(request: Request, query: str, stream: bool = True):
     run_id = uuid.uuid4().hex
     started_at = time.perf_counter()
     session_id = _get_session_id(request)
+    thread_id = _get_thread_id(request, session_id)
     checkpointer = getattr(request.app.state, "checkpointer", None)
     store = getattr(request.app.state, "store", None)
     pool = getattr(request.app.state, "pool", None)
@@ -557,13 +582,15 @@ async def stream_agent(request: Request, query: str, stream: bool = True):
         return await _sse_response(
             _stream_agent(
                 query, run_id, started_at,
-                session_id=session_id, checkpointer=checkpointer, store=store, pool=pool,
+                session_id=session_id, thread_id=thread_id,
+                checkpointer=checkpointer, store=store, pool=pool,
                 mcp_tools=mcp_tools, mcp_schemas=mcp_schemas,
             )
         )
     return await _run_agent(
         query, run_id, started_at,
-        session_id=session_id, checkpointer=checkpointer, store=store, pool=pool,
+        session_id=session_id, thread_id=thread_id,
+        checkpointer=checkpointer, store=store, pool=pool,
         mcp_tools=mcp_tools, mcp_schemas=mcp_schemas,
     )
 
@@ -599,16 +626,23 @@ async def keepalive_handler(request: Request):
 
 @app.get("/config", response_model=AgentConfigResponse)
 @app.get("/api/config", response_model=AgentConfigResponse)
-async def config() -> AgentConfigResponse:
+async def config(request: Request) -> AgentConfigResponse:
     models = [
         ModelInfoResponse(**model.__dict__)
         for model in configured_model_info(responder_provider())
     ]
+    # Registry tools plus the session-scoped tools that are actually live:
+    # memory needs the store, document search needs the pool.
+    tools = list(TOOLS.keys())
+    if getattr(request.app.state, "store", None) is not None:
+        tools += [MEMORY_READ_TOOL_NAME, MEMORY_WRITE_TOOL_NAME]
+    if getattr(request.app.state, "pool", None) is not None:
+        tools.append(DOCUMENT_SEARCH_TOOL_NAME)
     return AgentConfigResponse(
         status="configured" if models else "unconfigured",
         active_model=models[0] if models else None,
         fallback_models=models[1:],
-        tools=list(TOOLS.keys()),
+        tools=tools,
     )
 
 
@@ -661,6 +695,7 @@ async def list_runs(request: Request) -> RunListResponse:
         items.append(
             RunListItem(
                 run_id=row["run_id"],
+                thread_id=row.get("thread_id") or "",
                 query=row.get("query") or "",
                 status=row.get("status") or "",
                 elapsed_ms=row.get("elapsed_ms") or 0,
@@ -698,7 +733,21 @@ async def clear_memory(session_id: str, request: Request) -> dict:
     checkpointer = getattr(request.app.state, "checkpointer", None)
     pool = getattr(request.app.state, "pool", None)
     if checkpointer is not None:
-        await checkpointer.adelete_thread(session_id)
+        # A user may own several conversation threads; wipe every checkpoint.
+        # The legacy single-conversation thread shares the session id itself.
+        thread_ids = {session_id}
+        if pool is not None:
+            async with pool.connection() as conn:
+                cur = await conn.execute(
+                    "SELECT DISTINCT thread_id FROM traces WHERE user_id = %s",
+                    (session_id,),
+                )
+                rows = await cur.fetchall()
+            thread_ids.update(
+                row["thread_id"] for row in rows if row.get("thread_id")
+            )
+        for thread_id in thread_ids:
+            await checkpointer.adelete_thread(thread_id)
     if pool is not None:
         async with pool.connection() as conn:
             await conn.execute(
@@ -773,6 +822,25 @@ async def list_documents(session_id: str, request: Request) -> DocumentListRespo
             for row in rows
         ]
     )
+
+
+@app.delete("/documents/{session_id}/{doc_id}")
+@app.delete("/api/documents/{session_id}/{doc_id}")
+async def delete_document(session_id: str, doc_id: str, request: Request) -> dict:
+    if not _is_valid_session_id(session_id) or not _is_valid_session_id(doc_id):
+        raise HTTPException(status_code=400, detail="invalid id")
+    pool = getattr(request.app.state, "pool", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    async with pool.connection() as conn:
+        # Chunks are removed by the FK ON DELETE CASCADE.
+        cur = await conn.execute(
+            "DELETE FROM documents WHERE id = %s AND session_id = %s",
+            (doc_id, session_id),
+        )
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Document not found")
+    return {"status": "deleted", "doc_id": doc_id}
 
 
 @app.get("/", include_in_schema=False)

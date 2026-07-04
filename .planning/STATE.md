@@ -5,10 +5,10 @@ milestone_name: milestone
 current_phase: 05
 current_phase_name: mcp
 status: executing
-stopped_at: Phase 05 MCP implemented (4/4 plans; 21 new tests, 146 total green). Live deploy smoke (05-02) + live SC1/SC2/SC3 (05-03) pending human verify. NOT committed.
-last_updated: "2026-07-03T19:01:25Z"
-last_activity: 2026-07-03
-last_activity_desc: Phase 05 MCP implemented (4 plans; 146 tests green; real discovery round-trip verified offline)
+stopped_at: "Phases 04 (3444ad0) + 05 (140d102) committed. Post-milestone UX pass 2026-07-04: user_id/thread_id split (traces.user_id migration applied live), New chat + conversation-grouped History with restore, upload moved into prompt bar + document delete endpoint, About capabilities section, 154 tests green — uncommitted in working tree."
+last_updated: "2026-07-04T18:30:00Z"
+last_activity: 2026-07-04
+last_activity_desc: UX/architecture pass — thread/user memory split, conversation restore, prompt-bar upload, doc delete, About refresh (154 tests green)
 progress:
   total_phases: 5
   completed_phases: 4

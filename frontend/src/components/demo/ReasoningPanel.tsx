@@ -92,9 +92,14 @@ function PanelChrome({
   compact?: boolean
   onClose: () => void
 }) {
-  const latestStep = state.steps.at(-1)
+  // Providers sometimes emit a thought event with no text; an empty card is
+  // just noise in the timeline, so drop those from display entirely.
+  const visibleSteps = state.steps.filter(
+    (step) => stepType(step) !== 'thought' || stepContent(step).trim().length > 0,
+  )
+  const latestStep = visibleSteps.at(-1)
   const summary = state.runSummary
-  const toolsUsed = summary?.tools_used.length ? summary.tools_used : distinctTools(state.steps)
+  const toolsUsed = summary?.tools_used.length ? summary.tools_used : distinctTools(visibleSteps)
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -124,14 +129,14 @@ function PanelChrome({
         elapsed={summary?.elapsed_ms}
         isLoading={state.isLoading}
         latest={latestStep ? stepLabel(stepType(latestStep)) : 'idle'}
-        steps={state.steps.length}
+        steps={visibleSteps.length}
         tools={toolsUsed}
         usage={summary?.usage}
       />
-      <TraceProgress current={state.steps.length} total={Math.max(state.steps.length, state.isLoading ? state.steps.length + 1 : state.steps.length)} />
+      <TraceProgress current={visibleSteps.length} total={Math.max(visibleSteps.length, state.isLoading ? visibleSteps.length + 1 : visibleSteps.length)} />
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        {state.steps.length === 0 && !state.isLoading ? (
+        {visibleSteps.length === 0 && !state.isLoading ? (
           <div className="grid min-h-[320px] place-items-center text-center">
             <div>
               <Route className="mx-auto h-8 w-8 text-[var(--text-muted)]" />
@@ -141,7 +146,7 @@ function PanelChrome({
             </div>
           </div>
         ) : (
-          <Timeline steps={state.steps} latestKey={latestStep ? stepKey(latestStep) : undefined} />
+          <Timeline steps={visibleSteps} latestKey={latestStep ? stepKey(latestStep) : undefined} />
         )}
         {state.error ? <ErrorCard error={state.error} /> : null}
       </div>

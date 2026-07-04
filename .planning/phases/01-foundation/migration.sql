@@ -35,9 +35,12 @@ CREATE INDEX IF NOT EXISTS chunks_embedding_hnsw_idx
     WITH (m = 16, ef_construction = 64);
 
 -- Traces table: persisted agent run traces for observability (Phase 4)
+-- thread_id scopes one conversation (checkpointer thread); user_id scopes the
+-- stable browser identity (added 2026-07-04, migration traces_user_id_thread_split)
 CREATE TABLE IF NOT EXISTS traces (
     run_id      TEXT PRIMARY KEY,
     thread_id   TEXT,
+    user_id     TEXT,
     query       TEXT,
     steps       JSONB,
     final_answer TEXT,
@@ -47,6 +50,7 @@ CREATE TABLE IF NOT EXISTS traces (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS traces_thread_idx  ON traces (thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS traces_user_idx    ON traces (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS traces_created_idx ON traces (created_at DESC);
 
 -- Keepalive table: single-row ping target for Vercel cron

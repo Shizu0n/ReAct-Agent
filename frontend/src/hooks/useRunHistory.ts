@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AgentResponse, RunListItem, RunListResponse } from '../types'
+import type { AgentResponse, ConversationEntry, RunListItem, RunListResponse } from '../types'
+
+// Restoring a conversation refetches one trace per run; cap it so a very long
+// session cannot fan out into dozens of requests.
+const MAX_RESTORED_RUNS = 30
 
 function apiBase(): string {
   const configured = (import.meta.env.VITE_API_URL as string | undefined)?.trim()
@@ -96,5 +100,28 @@ export function useRunHistory(sessionId: string) {
     [sessionId],
   )
 
-  return { runs, listState, selected, detailState, selectRun, refresh }
+  const loadConversation = useCallback(async (threadId?: string): Promise<ConversationEntry[]> => {
+    if (!sessionId || runs.length === 0) return []
+
+    // Runs arrive newest-first; the chat transcript needs chronological order.
+    const scoped = threadId ? runs.filter((run) => run.thread_id === threadId) : runs
+    const ordered = scoped.slice(0, MAX_RESTORED_RUNS).reverse()
+    const results = await Promise.all(
+      ordered.map(async (run): Promise<ConversationEntry | null> => {
+        try {
+          const response = await fetch(`${apiBase()}/trace/${run.run_id}`, {
+            headers: { Accept: 'application/json', 'X-Session-Id': sessionId },
+          })
+          if (!response.ok) return null
+          const data = (await response.json()) as AgentResponse
+          return { query: run.query, response: data }
+        } catch {
+          return null
+        }
+      }),
+    )
+    return results.filter((entry): entry is ConversationEntry => entry !== null)
+  }, [runs, sessionId])
+
+  return { runs, listState, selected, detailState, selectRun, refresh, loadConversation }
 }

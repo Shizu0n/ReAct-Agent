@@ -58,7 +58,7 @@ class PersistTests(unittest.TestCase):
         pool, conn = _stub_pool()
         response = _make_response()
         asyncio.run(
-            persist_trace(pool, "run-123", "thread-9", "what is 1 + 1", response)
+            persist_trace(pool, "run-123", "thread-9", "user-7", "what is 1 + 1", response)
         )
 
         conn.execute.assert_called_once()
@@ -75,6 +75,7 @@ class PersistTests(unittest.TestCase):
 
         self.assertIn("run-123", params)
         self.assertIn("thread-9", params)
+        self.assertIn("user-7", params)
         self.assertIn("what is 1 + 1", params)
         # steps + usage are JSONB-wrapped for psycopg.
         json_params = [p for p in params if isinstance(p, Json)]
@@ -82,14 +83,14 @@ class PersistTests(unittest.TestCase):
 
     def test_persist_pool_none_is_noop(self):
         # Must not raise when the pool is unavailable.
-        asyncio.run(persist_trace(None, "run-1", "thread-1", "q", _make_response()))
+        asyncio.run(persist_trace(None, "run-1", "thread-1", "user-1", "q", _make_response()))
 
     def test_persist_failure_is_catchable(self):
         pool = MagicMock()
         pool.connection.side_effect = RuntimeError("db down")
         with self.assertRaises(RuntimeError):
             asyncio.run(
-                persist_trace(pool, "run-1", "thread-1", "q", _make_response())
+                persist_trace(pool, "run-1", "thread-1", "user-1", "q", _make_response())
             )
 
 
@@ -115,7 +116,7 @@ class RedactionTests(unittest.TestCase):
         ]
         response = _make_response(steps=steps, answer=f"the token is {secret}")
         pool, conn = _stub_pool()
-        asyncio.run(persist_trace(pool, "run-1", "thread-1", "q", response))
+        asyncio.run(persist_trace(pool, "run-1", "thread-1", "user-1", "q", response))
 
         params = conn.execute.call_args.args[1]
         steps_param = next(p for p in params if isinstance(p, Json))
@@ -123,7 +124,7 @@ class RedactionTests(unittest.TestCase):
         self.assertNotIn(secret, steps_dump)
         self.assertIn("[redacted]", steps_dump)
 
-        final_answer = params[4]
+        final_answer = params[5]
         self.assertNotIn(secret, final_answer)
         self.assertIn("[redacted]", final_answer)
 
@@ -141,7 +142,7 @@ class RedactionTests(unittest.TestCase):
         ]
         response = _make_response(steps=steps, answer=f"tok {secret}")
         pool, _conn = _stub_pool()
-        asyncio.run(persist_trace(pool, "run-1", "thread-1", "q", response))
+        asyncio.run(persist_trace(pool, "run-1", "thread-1", "user-1", "q", response))
         # The live response objects must be untouched (only a redacted copy stored).
         self.assertIn(secret, response.steps[0]["observation"])
         self.assertIn(secret, response.answer)
@@ -157,31 +158,31 @@ class FetchTests(unittest.TestCase):
              "elapsed_ms": 10, "usage": {}, "created_at": datetime.now(timezone.utc)},
         ]
         pool, conn = _stub_pool(fetchall_rows=rows)
-        result = asyncio.run(fetch_runs(pool, "thread-42"))
+        result = asyncio.run(fetch_runs(pool, "user-42"))
 
         self.assertEqual(result, rows)
         sql = conn.execute.call_args.args[0]
         params = conn.execute.call_args.args[1]
-        self.assertIn("WHERE thread_id = %s", sql)
+        self.assertIn("WHERE user_id = %s", sql)
         self.assertIn("ORDER BY created_at DESC", sql)
         self.assertIn("LIMIT", sql)
-        self.assertIn("thread-42", params)
+        self.assertIn("user-42", params)
 
     def test_fetch_runs_pool_none(self):
         self.assertEqual(asyncio.run(fetch_runs(None, "thread-1")), [])
 
-    def test_fetch_trace_scoped_by_thread(self):
+    def test_fetch_trace_scoped_by_user(self):
         row = {"run_id": "r1", "steps": [], "final_answer": "x",
                "status": "success", "usage": {}, "elapsed_ms": 1}
         pool, conn = _stub_pool(fetchone_row=row)
-        result = asyncio.run(fetch_trace(pool, "r1", "thread-9"))
+        result = asyncio.run(fetch_trace(pool, "r1", "user-9"))
 
         self.assertEqual(result, row)
         sql = conn.execute.call_args.args[0]
         params = conn.execute.call_args.args[1]
-        # The lookup is scoped to the owning session, not run_id alone (T-4-05).
-        self.assertIn("WHERE run_id = %s AND thread_id = %s", sql)
-        self.assertEqual(params, ("r1", "thread-9"))
+        # The lookup is scoped to the owning user, not run_id alone (T-4-05).
+        self.assertIn("WHERE run_id = %s AND user_id = %s", sql)
+        self.assertEqual(params, ("r1", "user-9"))
 
     def test_fetch_trace_pool_none(self):
         self.assertIsNone(asyncio.run(fetch_trace(None, "r1", "thread-1")))

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
-import { Code2, ExternalLink, History, Info, Menu, X } from 'lucide-react'
+import { Code2, ExternalLink, History, Info, Menu, SquarePen, X } from 'lucide-react'
 import { ChatWorkspace } from './components/ChatWorkspace'
 import { PortfolioView } from './components/PortfolioView'
 import { ProjectMark } from './components/ProjectMark'
@@ -67,7 +67,7 @@ function writeShellState(patch: Partial<PersistedShellState>): void {
 }
 
 function App() {
-  const { state, sendQuery, clearHistory, sessionId } = useAgent()
+  const { state, sendQuery, clearHistory, restoreConversation, newChat, sessionId } = useAgent()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarHidden, setSidebarHidden] = useState(() => readShellState().sidebarHidden)
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(LEFT_SIDEBAR_DEFAULT)
@@ -84,7 +84,10 @@ function App() {
   function handleTraceOpenChange(open: TraceOpenUpdate): void {
     setTraceOpen((current) => {
       const nextOpen = typeof open === 'function' ? open(current) : open
-      writeShellState({ traceOpen: nextOpen })
+      // Closing the panel by hand counts as a dismissal: stop auto-opening it.
+      writeShellState(
+        current && !nextOpen ? { traceOpen: nextOpen, traceDismissed: true } : { traceOpen: nextOpen },
+      )
       return nextOpen
     })
   }
@@ -96,6 +99,19 @@ function App() {
   }
 
   function handleReasoningStart(): void {
+    // First run on desktop: surface the reasoning trace once, unless the user
+    // has already dismissed it. The trace is the product's differentiator.
+    const shell = readShellState()
+    if (
+      !traceOpen &&
+      !shell.traceAutoOpened &&
+      !shell.traceDismissed &&
+      window.matchMedia('(min-width: 1280px)').matches
+    ) {
+      writeShellState({ traceOpen: true, traceAutoOpened: true })
+      setTraceOpen(true)
+      return
+    }
     writeShellState({ traceOpen })
   }
 
@@ -168,6 +184,19 @@ function App() {
           </div>
         </div>
 
+        <button
+          type="button"
+          onClick={() => {
+            newChat()
+            switchTab('chat')
+          }}
+          disabled={state.isLoading}
+          className="mb-4 flex items-center gap-3 rounded-lg border border-[var(--border-default)] bg-[var(--bg-tertiary)] px-3 py-2.5 text-sm text-[var(--text-primary)] transition hover:border-[var(--accent-border)] hover:bg-[var(--bg-elevated)] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <SquarePen className="h-4 w-4 text-[var(--accent-text)]" />
+          New chat
+        </button>
+
         <nav className="flex flex-1 flex-col gap-1">
           {navItems.map((item) => (
             <button
@@ -229,7 +258,13 @@ function App() {
             onOpenPortfolio={() => switchTab('portfolio')}
           />
         ) : activeTab === 'history' ? (
-          <RunHistory sessionId={sessionId} />
+          <RunHistory
+            sessionId={sessionId}
+            onOpenInChat={(entries, threadId) => {
+              restoreConversation(entries, threadId)
+              switchTab('chat')
+            }}
+          />
         ) : (
           <PortfolioView onOpenChat={() => switchTab('chat')} />
         )}

@@ -1,10 +1,12 @@
 const stackRows = [
   ['Python 3.11', 'Runtime'],
-  ['LangGraph 0.2', 'Agent orchestration'],
+  ['LangGraph 1.x', 'Agent orchestration'],
   ['FastAPI', 'REST + SSE API'],
-  ['Pydantic', 'Input validation'],
+  ['Supabase Postgres + pgvector', 'Memory & document RAG'],
+  ['MCP (Streamable HTTP)', 'Dynamic tool discovery'],
+  ['Gemini · Groq · GitHub Models', 'Free-tier LLM fallback chain'],
   ['Tavily API', 'Web search tool'],
-  ['Vercel', 'Frontend deployment'],
+  ['Vercel', 'Full-stack deployment'],
 ]
 
 export function StackSection() {

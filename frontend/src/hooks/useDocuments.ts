@@ -72,9 +72,33 @@ export function useDocuments(sessionId: string) {
     [sessionId, uploading, listDocuments],
   )
 
+  const deleteDocument = useCallback(
+    async (docId: string): Promise<void> => {
+      if (!sessionId) return
+      setError(null)
+      try {
+        const response = await fetch(`${apiBaseUrl()}/documents/${sessionId}/${docId}`, {
+          method: 'DELETE',
+          headers: { 'x-session-id': sessionId },
+        })
+        if (!response.ok && response.status !== 404) {
+          setError(`Could not remove document (${response.status})`)
+          return
+        }
+        await listDocuments()
+      } catch {
+        setError('Could not remove document')
+      }
+    },
+    [sessionId, listDocuments],
+  )
+
   useEffect(() => {
-    void listDocuments()
+    async function load(): Promise<void> {
+      await listDocuments()
+    }
+    void load()
   }, [listDocuments])
 
-  return { documents, uploading, error, uploadDocument }
+  return { documents, uploading, error, uploadDocument, deleteDocument }
 }

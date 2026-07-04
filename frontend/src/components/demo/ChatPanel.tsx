@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { ArrowUp, CircuitBoard, Lightbulb, Wrench } from 'lucide-react'
+import { ArrowUp, Check, ChevronDown, ChevronUp, CircuitBoard, Lightbulb, Wrench } from 'lucide-react'
 import clsx from 'clsx'
-import type { AgentState, Message } from '../../types'
+import type { AgentState, DocumentInfo, Message } from '../../types'
 import { ProjectMark } from '../ProjectMark'
 import { MessageMarkdown } from './MessageMarkdown'
 import { AnimatedAIChat } from '../ui/animated-ai-chat'
+import { useDocuments } from '../../hooks/useDocuments'
 
 const starterSuggestions = [
   'What is the latest Python version?',
@@ -25,6 +26,7 @@ type ChatPanelProps = {
 
 export function ChatPanel({ query, setQuery, state, sessionId = '', loadingLabel, onSubmit, onClearHistory }: ChatPanelProps) {
   const scrollerRef = useRef<HTMLDivElement | null>(null)
+  const { documents, uploading, error: uploadError, uploadDocument, deleteDocument } = useDocuments(sessionId)
   const liveSuggestions = state.suggestions
   const canClearHistory = state.messages.length > 0 || state.steps.length > 0 || state.runSummary !== null
   const hasConversation = state.messages.length > 0 || state.steps.length > 0 || state.isLoading
@@ -39,7 +41,7 @@ export function ChatPanel({ query, setQuery, state, sessionId = '', loadingLabel
       top: scrollerRef.current.scrollHeight,
       behavior: 'smooth',
     })
-  }, [hasConversation, state.messages, state.steps.length, state.isLoading])
+  }, [hasConversation, state.messages, state.steps.length, state.isLoading, state.suggestions])
 
   return (
     <div className="relative mx-0 flex h-full min-h-0 min-w-0 w-full max-w-[100vw] flex-col overflow-hidden bg-[var(--bg-primary)] lg:mx-auto lg:max-w-[920px]">
@@ -69,12 +71,20 @@ export function ChatPanel({ query, setQuery, state, sessionId = '', loadingLabel
         onSubmit={onSubmit}
         onClearHistory={onClearHistory}
         canClearHistory={canClearHistory}
+        documents={documents}
+        uploading={uploading}
+        uploadError={uploadError}
+        onUploadFile={(file) => void uploadDocument(file)}
+        onDeleteDocument={(docId) => void deleteDocument(docId)}
       />
     </div>
   )
 }
 
 function StatusStrip({ state, sessionId }: { state: AgentState; sessionId?: string }) {
+  const [copied, setCopied] = useState(false)
+  const [toolsOpen, setToolsOpen] = useState(false)
+  const [slowCheck, setSlowCheck] = useState(false)
   const activeModel = state.config?.active_model?.label
   const fallbackCount = state.config?.fallback_models.length ?? 0
   const modelLabel = activeModel ?? modelStatusLabel(state.connectionStatus)
@@ -83,6 +93,16 @@ function StatusStrip({ state, sessionId }: { state: AgentState; sessionId?: stri
       ? `${modelLabel} +${fallbackCount} fallback${fallbackCount === 1 ? '' : 's'}`
       : modelLabel
   const tools = state.config?.tools ?? []
+
+  // Free-tier cold start: the first request after idle can take several
+  // seconds, so tell the user the backend is waking rather than looking stuck.
+  // The label below only renders while status is 'checking', so slowCheck
+  // never needs an explicit reset.
+  useEffect(() => {
+    if (state.connectionStatus !== 'checking') return undefined
+    const timer = window.setTimeout(() => setSlowCheck(true), 2500)
+    return () => window.clearTimeout(timer)
+  }, [state.connectionStatus])
 
   return (
     <div className="flex flex-col gap-3 border-b border-[var(--border-subtle)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between lg:px-8">
@@ -96,7 +116,9 @@ function StatusStrip({ state, sessionId }: { state: AgentState; sessionId?: stri
           transition={{ repeat: Infinity, duration: 1.2 }}
         />
         <span className="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-[var(--text-tertiary)]">
-          {connectionStatusLabel(state.connectionStatus)}
+          {state.connectionStatus === 'checking' && slowCheck
+            ? 'Waking backend (free-tier cold start)…'
+            : connectionStatusLabel(state.connectionStatus)}
         </span>
       </div>
 
@@ -105,20 +127,48 @@ function StatusStrip({ state, sessionId }: { state: AgentState; sessionId?: stri
           <CircuitBoard className="h-3 w-3 text-[var(--accent-text)]" />
           {modelSummary}
         </span>
-        {tools.slice(0, 3).map((tool) => (
-          <span key={tool} className="inline-flex items-center gap-1 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2.5 py-1 font-mono">
-            <Wrench className="h-3 w-3 text-[var(--action)]" />
-            {tool}
-          </span>
-        ))}
-        {sessionId ? (
-          <span
-            className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2.5 py-1 font-mono"
-            title="Click to copy session ID"
-            onClick={() => navigator.clipboard.writeText(sessionId)}
+        {tools.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => setToolsOpen((current) => !current)}
+            aria-expanded={toolsOpen}
+            title={tools.join(', ')}
+            className="inline-flex items-center gap-1 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2.5 py-1 font-mono transition-colors hover:border-[var(--border-default)] hover:text-[var(--text-secondary)]"
           >
-            {sessionId.slice(0, 8)}&hellip;
-          </span>
+            <Wrench className="h-3 w-3 text-[var(--action)]" />
+            {tools.length} tools
+            {toolsOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          </button>
+        ) : null}
+        {toolsOpen
+          ? tools.map((tool) => (
+              <span key={tool} className="inline-flex items-center gap-1 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2.5 py-1 font-mono">
+                <Wrench className="h-3 w-3 text-[var(--action)]" />
+                {tool}
+              </span>
+            ))
+          : null}
+        {sessionId ? (
+          <button
+            type="button"
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2.5 py-1 font-mono transition-colors hover:border-[var(--border-default)] hover:text-[var(--text-secondary)]"
+            title="Click to copy session ID"
+            aria-label="Copy session ID"
+            onClick={() => {
+              void navigator.clipboard.writeText(sessionId)
+              setCopied(true)
+              window.setTimeout(() => setCopied(false), 1500)
+            }}
+          >
+            {copied ? (
+              <>
+                <Check className="h-3 w-3 text-[var(--accent-text)]" />
+                Copied
+              </>
+            ) : (
+              <>Session {sessionId.slice(0, 8)}&hellip;</>
+            )}
+          </button>
         ) : null}
       </div>
     </div>
@@ -132,6 +182,11 @@ function PromptInput({
   onSubmit,
   onClearHistory,
   canClearHistory,
+  documents,
+  uploading,
+  uploadError,
+  onUploadFile,
+  onDeleteDocument,
 }: {
   query: string
   setQuery: (query: string) => void
@@ -139,6 +194,11 @@ function PromptInput({
   onSubmit: (query: string) => void
   onClearHistory?: () => void
   canClearHistory: boolean
+  documents: DocumentInfo[]
+  uploading: boolean
+  uploadError: string | null
+  onUploadFile: (file: File) => void
+  onDeleteDocument: (docId: string) => void
 }) {
   return (
     <>
@@ -150,6 +210,11 @@ function PromptInput({
         isLoading={state.isLoading}
         onClearHistory={onClearHistory}
         canClearHistory={canClearHistory}
+        documents={documents}
+        uploading={uploading}
+        uploadError={uploadError}
+        onUploadFile={onUploadFile}
+        onDeleteDocument={onDeleteDocument}
       />
       <p className="mx-auto mt-2 max-w-[20rem] px-4 text-center text-[0.7rem] leading-5 text-[var(--text-tertiary)] sm:max-w-none">
         ReAct Agent can make mistakes. Verify important information.

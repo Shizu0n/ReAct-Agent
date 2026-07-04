@@ -451,7 +451,41 @@ class MemorySessionTests(unittest.TestCase):
     def test_graph_config_nests_thread_id_under_configurable(self):
         session_id = "12345678-1234-1234-1234-123456789abc"
         config = self.api._graph_config(session_id)
-        self.assertEqual(config, {"configurable": {"thread_id": session_id}})
+        # Without an explicit user, the thread doubles as the user scope.
+        self.assertEqual(
+            config,
+            {"configurable": {"thread_id": session_id, "user_id": session_id}},
+        )
+
+    def test_graph_config_carries_user_and_thread(self):
+        thread_id = "11111111-1111-1111-1111-111111111111"
+        user_id = "22222222-2222-2222-2222-222222222222"
+        config = self.api._graph_config(thread_id, user_id)
+        self.assertEqual(
+            config,
+            {"configurable": {"thread_id": thread_id, "user_id": user_id}},
+        )
+
+    def test_get_thread_id_header_wins(self):
+        from unittest.mock import MagicMock
+
+        thread_id = "11111111-1111-1111-1111-111111111111"
+        session_id = "22222222-2222-2222-2222-222222222222"
+        mock_request = MagicMock()
+        mock_request.headers.get.return_value = thread_id
+
+        self.assertEqual(self.api._get_thread_id(mock_request, session_id), thread_id)
+
+    def test_get_thread_id_falls_back_to_session(self):
+        from unittest.mock import MagicMock
+
+        session_id = "22222222-2222-2222-2222-222222222222"
+        for header in ("", "not-a-uuid"):
+            mock_request = MagicMock()
+            mock_request.headers.get.return_value = header
+            self.assertEqual(
+                self.api._get_thread_id(mock_request, session_id), session_id
+            )
 
 
 class ClearMemoryTests(unittest.TestCase):
@@ -460,7 +494,11 @@ class ClearMemoryTests(unittest.TestCase):
         self.api = api
 
         self.mock_conn = MagicMock()
-        self.mock_conn.execute = AsyncMock()
+        # clear_memory first SELECTs the user's thread ids from traces, then
+        # DELETEs the memory store rows; the cursor's fetchall must be awaitable.
+        self.mock_cursor = MagicMock()
+        self.mock_cursor.fetchall = AsyncMock(return_value=[])
+        self.mock_conn.execute = AsyncMock(return_value=self.mock_cursor)
 
         self.mock_pool = MagicMock()
         self.mock_pool.connection.return_value.__aenter__ = AsyncMock(return_value=self.mock_conn)
@@ -491,10 +529,29 @@ class ClearMemoryTests(unittest.TestCase):
         self.assertEqual(body["session_id"], session_id)
 
         self.mock_checkpointer.adelete_thread.assert_called_once_with(session_id)
-        self.mock_conn.execute.assert_called_once()
-        sql, params = self.mock_conn.execute.call_args[0]
+        # Two statements: SELECT the user's thread ids, then DELETE store rows.
+        self.assertEqual(self.mock_conn.execute.call_count, 2)
+        select_sql = self.mock_conn.execute.call_args_list[0].args[0]
+        self.assertIn("SELECT DISTINCT thread_id FROM traces WHERE user_id", select_sql)
+        sql, params = self.mock_conn.execute.call_args_list[1].args
         self.assertIn("DELETE FROM store WHERE prefix LIKE", sql)
         self.assertIn(f"memories.{session_id}", params[0])
+
+    def test_clear_memory_wipes_every_user_thread(self):
+        session_id = "12345678-1234-1234-1234-123456789abc"
+        thread_a = "11111111-1111-1111-1111-111111111111"
+        self.mock_cursor.fetchall = AsyncMock(
+            return_value=[{"thread_id": thread_a}, {"thread_id": session_id}]
+        )
+
+        response = self.client.delete(f"/api/memory/{session_id}")
+
+        self.assertEqual(response.status_code, 200)
+        deleted = {
+            call.args[0]
+            for call in self.mock_checkpointer.adelete_thread.call_args_list
+        }
+        self.assertEqual(deleted, {session_id, thread_a})
 
     def test_malformed_session_id_returns_400_and_no_db_access(self):
         response = self.client.delete("/api/memory/not-a-uuid")
@@ -573,10 +630,10 @@ class RunsEndpointTests(unittest.TestCase):
         self.assertEqual(body["runs"][0]["provider"], "gemini")
         self.assertFalse(body["runs"][0]["has_fallback"])
         self.assertTrue(body["runs"][1]["has_fallback"])
-        # The listing was scoped to the caller's session (thread_id).
+        # The listing was scoped to the caller's user identity.
         sql = conn.execute.call_args.args[0]
         params = conn.execute.call_args.args[1]
-        self.assertIn("WHERE thread_id = %s", sql)
+        self.assertIn("WHERE user_id = %s", sql)
         self.assertIn(session_id, params)
 
 
@@ -670,6 +727,65 @@ class TraceEndpointTests(unittest.TestCase):
         response = self.client.get("/trace/does-not-exist")
 
         self.assertEqual(response.status_code, 404)
+
+
+class DocumentDeleteTests(unittest.TestCase):
+    SESSION = "12345678-1234-1234-1234-123456789abc"
+    DOC = "87654321-4321-4321-4321-cba987654321"
+
+    def setUp(self):
+        import api
+
+        self.api = api
+        self.client = TestClient(api.app)
+
+    def tearDown(self):
+        self.api.app.state.pool = None
+        self.client.close()
+
+    def _pool_with_rowcount(self, rowcount):
+        pool, conn = _stub_pool()
+        conn.execute.return_value.rowcount = rowcount
+        return pool, conn
+
+    def test_delete_scoped_to_session(self):
+        pool, conn = self._pool_with_rowcount(1)
+        self.api.app.state.pool = pool
+
+        response = self.client.delete(f"/api/documents/{self.SESSION}/{self.DOC}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "deleted")
+        sql, params = conn.execute.call_args.args
+        self.assertIn("DELETE FROM documents WHERE id = %s AND session_id = %s", sql)
+        self.assertEqual(params, (self.DOC, self.SESSION))
+
+    def test_delete_unknown_doc_404(self):
+        pool, _conn = self._pool_with_rowcount(0)
+        self.api.app.state.pool = pool
+
+        response = self.client.delete(f"/api/documents/{self.SESSION}/{self.DOC}")
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_delete_invalid_ids_400(self):
+        pool, conn = self._pool_with_rowcount(1)
+        self.api.app.state.pool = pool
+
+        for path in (
+            f"/api/documents/not-a-uuid/{self.DOC}",
+            f"/api/documents/{self.SESSION}/not-a-uuid",
+        ):
+            response = self.client.delete(path)
+            self.assertEqual(response.status_code, 400)
+        conn.execute.assert_not_called()
+
+    def test_delete_no_pool_503(self):
+        self.api.app.state.pool = None
+
+        response = self.client.delete(f"/api/documents/{self.SESSION}/{self.DOC}")
+
+        self.assertEqual(response.status_code, 503)
 
 
 if __name__ == "__main__":

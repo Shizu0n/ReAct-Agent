@@ -544,7 +544,11 @@ async def tool_node(
     tool_calls = list(last_ai.tool_calls) if last_ai and last_ai.tool_calls else []
 
     thought = str(last_ai.content) if last_ai else ""
-    session_id = config.get("configurable", {}).get("thread_id", "")
+    # Long-term memory and documents are user-scoped (stable across
+    # conversations); the checkpointer alone is thread-scoped. Fall back to
+    # thread_id for callers that predate the user/thread split.
+    configurable = config.get("configurable", {})
+    session_id = configurable.get("user_id") or configurable.get("thread_id", "")
     new_messages: list[BaseMessage] = []
     new_steps: list[Step] = []
     for call in tool_calls:

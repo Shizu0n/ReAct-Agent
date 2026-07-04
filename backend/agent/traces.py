@@ -24,8 +24,9 @@ def _redact_steps(steps: list[dict]) -> list[dict]:
     return redacted
 
 
-async def persist_trace(pool, run_id, thread_id, query, response) -> None:
+async def persist_trace(pool, run_id, thread_id, user_id, query, response) -> None:
     """Insert a completed run into the traces table. No-op when pool is None.
+    thread_id scopes the conversation; user_id scopes the browser identity.
     Steps and final_answer are redaction-scrubbed; steps and usage are JSONB."""
     if pool is None:
         return
@@ -34,6 +35,7 @@ async def persist_trace(pool, run_id, thread_id, query, response) -> None:
     params = (
         run_id,
         thread_id,
+        user_id,
         query,
         Json(steps),
         final_answer,
@@ -45,41 +47,42 @@ async def persist_trace(pool, run_id, thread_id, query, response) -> None:
         await conn.execute(
             """
             INSERT INTO traces
-                (run_id, thread_id, query, steps, final_answer, status, usage, elapsed_ms)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                (run_id, thread_id, user_id, query, steps, final_answer, status, usage, elapsed_ms)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (run_id) DO NOTHING
             """,
             params,
         )
 
 
-async def fetch_runs(pool, thread_id, limit: int = 50) -> list[dict]:
-    """Session-scoped run summaries, newest first. Empty list when pool is None."""
+async def fetch_runs(pool, user_id, limit: int = 50) -> list[dict]:
+    """User-scoped run summaries (every conversation), newest first.
+    Empty list when pool is None."""
     if pool is None:
         return []
     async with pool.connection() as conn:
         cur = await conn.execute(
             """
-            SELECT run_id, query, status, elapsed_ms, usage, created_at
+            SELECT run_id, thread_id, query, status, elapsed_ms, usage, created_at
             FROM traces
-            WHERE thread_id = %s
+            WHERE user_id = %s
             ORDER BY created_at DESC
             LIMIT %s
             """,
-            (thread_id, limit),
+            (user_id, limit),
         )
         return await cur.fetchall()
 
 
-async def fetch_trace(pool, run_id, thread_id) -> dict | None:
-    """Single persisted trace row scoped to its owning session, or None when
-    absent / not owned by thread_id / pool is None."""
+async def fetch_trace(pool, run_id, user_id) -> dict | None:
+    """Single persisted trace row scoped to its owning user, or None when
+    absent / not owned by user_id / pool is None."""
     if pool is None:
         return None
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "SELECT * FROM traces WHERE run_id = %s AND thread_id = %s",
-            (run_id, thread_id),
+            "SELECT * FROM traces WHERE run_id = %s AND user_id = %s",
+            (run_id, user_id),
         )
         return await cur.fetchone()
 
