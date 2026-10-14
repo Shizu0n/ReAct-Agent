@@ -52,6 +52,9 @@ async def create_pool(min_size: int = 1, max_size: int = 3) -> AsyncConnectionPo
         conninfo=_pooler_url(),
         min_size=min_size,
         max_size=max_size,
+        # A warm serverless instance outlives database restarts (e.g. a paused Supabase
+        # project being restored); validate each connection before handing it out.
+        check=AsyncConnectionPool.check_connection,
         kwargs={
             "prepare_threshold": None,
             "autocommit": True,
