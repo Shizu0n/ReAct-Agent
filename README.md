@@ -168,7 +168,7 @@ flowchart LR
 The agent does not use OpenAI or Anthropic. The default chain uses only providers configured in `.env`, in this fallback order:
 
 1. `GEMINI_API_KEY` with `GEMINI_MODEL`, default `gemini-2.5-flash`
-2. `GROQ_API_KEY` with `GROQ_MODEL`, default `llama-3.3-70b-versatile`
+2. `GROQ_API_KEY` with `GROQ_MODEL`, default `openai/gpt-oss-120b` (Groq retired `llama-3.3-70b-versatile`)
 3. `GITHUB_MODELS_TOKEN` + `GITHUB_MODELS_MODEL`
 
 All three are reached through one OpenAI-compatible tool-calling path (Gemini via its OpenAI-compat endpoint), so the agent uses native function calling, not text parsing. `FreeModelFallback` tries each provider in order. If one fails, it skips to the next. If all fail, it raises `RuntimeError` with concatenated errors (secrets redacted).

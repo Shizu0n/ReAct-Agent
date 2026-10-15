@@ -28,25 +28,5 @@
         }
       ]
     }
-  ],
-  "rewrites": [
-    { "source": "/api/:path*", "destination": "/api/index.py" },
-    { "source": "/agent/:path*", "destination": "/api/index.py" },
-    { "source": "/run", "destination": "/api/index.py" },
-    { "source": "/health", "destination": "/api/index.py" },
-    { "source": "/config", "destination": "/api/index.py" },
-    { "source": "/suggestions", "destination": "/api/index.py" },
-    { "source": "/trace/:path*", "destination": "/api/index.py" },
-    { "source": "/runs", "destination": "/api/index.py" },
-    { "source": "/keepalive", "destination": "/api/index.py" },
-    { "source": "/memory/:path*", "destination": "/api/index.py" },
-    { "source": "/upload", "destination": "/api/index.py" },
-    { "source": "/documents/:path*", "destination": "/api/index.py" },
-    { "source": "/mcp/:path*", "destination": "/api/index.py" },
-    { "source": "/mcp", "destination": "/api/index.py" },
-    {
-      "source": "/:path((?!assets/|.*\\..*).*)",
-      "destination": "/index.html"
-    }
   ]
 }

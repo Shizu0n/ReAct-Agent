@@ -92,7 +92,7 @@ def configured_model_info(preferred: str | None = None) -> list[ModelInfo]:
             ModelInfo("gemini", "Gemini", model, _model_label("Gemini", model))
         )
     if os.getenv("GROQ_API_KEY"):
-        model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+        model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
         models.append(ModelInfo("groq", "Groq", model, _model_label("Groq", model)))
     if os.getenv("GITHUB_MODELS_TOKEN") and os.getenv("GITHUB_MODELS_MODEL"):
         model = os.environ["GITHUB_MODELS_MODEL"]
@@ -357,7 +357,7 @@ def _groq_provider() -> OpenAICompatProvider:
         name="groq",
         url="https://api.groq.com/openai/v1/chat/completions",
         model_env="GROQ_MODEL",
-        model_default="llama-3.3-70b-versatile",
+        model_default="openai/gpt-oss-120b",
         headers_factory=lambda: {
             "Authorization": f"Bearer {os.environ['GROQ_API_KEY']}"
         },
@@ -413,6 +413,7 @@ def responder_provider() -> str:
 # billed at $0; this is an at-scale reference, not an invoice.
 MODEL_PRICING_USD_PER_1M: dict[str, tuple[float, float]] = {
     "gemini-2.5-flash": (0.30, 2.50),
+    "openai/gpt-oss-120b": (0.15, 0.60),
     "llama-3.3-70b-versatile": (0.59, 0.79),
     "openai/gpt-4o-mini": (0.15, 0.60),
 }
