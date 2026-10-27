@@ -128,7 +128,7 @@ flowchart TB
 | Tool | Description | API |
 | --- | --- | --- |
 | `web_search` | Web search via Tavily returning compact results with title, URL, and truncated snippet. Defaults: `TAVILY_MAX_RESULTS=2`, `TAVILY_SNIPPET_CHARS=360`. | Tavily API (`TAVILY_API_KEY`) |
-| `python_executor` | Runs code in an isolated subprocess with AST validation, import whitelist (`math`, `json`, `re`, `statistics`, `random`, `itertools`, `functools`, `sympy`, `numpy`), blocked builtins (`open`, `exec`, `eval`, `compile`, `__import__`, etc.), and a 10s timeout. Automatically strips Markdown fences and redundant safe imports. | Local subprocess sandbox |
+| `python_executor` | Runs code in an isolated subprocess with AST validation, import whitelist (`math`, `json`, `re`, `statistics`, `random`, `itertools`, `functools`, `sympy`, `numpy`), blocked builtins (`open`, `exec`, `eval`, `compile`, `__import__`, etc.), and a 30s timeout by default. Automatically strips Markdown fences and redundant safe imports. | Local subprocess sandbox |
 | `calculator` | Evaluates math expressions with `eval()` and no builtins, AST validation of every node, and full access to the `math` module. Only arithmetic operators, constants, and `math.*` functions are allowed. | Local `math` module |
 
 ## MCP
@@ -287,7 +287,7 @@ This project wraps a ReAct loop in LangGraph, exposes it through FastAPI with bo
 
 **Observability:** Every run reports token usage, estimated cost, latency, and the provider that served each call, surfaced on the API response and in the reasoning-trace header. An evaluation harness (`backend/evals/`) scores task success and tool-selection accuracy against a labelled dataset.
 
-**Security:** `python_executor` runs in a subprocess with AST validation, import whitelist, blocked builtins, and a 10s timeout. `redaction.py` scrubs secrets from all log output and error messages. Rate limiting via slowapi caps at 10 req/min/IP. Memory content stored in Supabase via `memory_write` is **not auto-redacted** — the global secret redaction covers logs and error messages, not stored memory values. Per-session memory is capped at `MEMORY_MAX_STORED` entries (default 20) to bound Supabase free-tier storage growth.
+**Security:** `python_executor` runs in a subprocess with AST validation, import whitelist, blocked builtins, and a 30s timeout by default. `redaction.py` scrubs secrets from all log output and error messages. Rate limiting via slowapi caps at 10 req/min/IP. Memory content stored in Supabase via `memory_write` is **not auto-redacted** — the global secret redaction covers logs and error messages, not stored memory values. Per-session memory is capped at `MEMORY_MAX_STORED` entries (default 20) to bound Supabase free-tier storage growth.
 
 ## Metrics
 
@@ -312,7 +312,7 @@ This project wraps a ReAct loop in LangGraph, exposes it through FastAPI with bo
 
 **Why SSE over WebSockets:** The agent already produces sequential events: thought, action, observation, final. SSE maps to that shape without WebSocket ceremony. One request, ordered events, easy `curl -N`, done. The frontend parses SSE chunks progressively with a manual buffer, not EventSource, to handle Vercel edge proxying and partial flushes.
 
-**Why subprocess for python_executor:** `exec()` in-process is a sandbox escape waiting to happen. A subprocess with AST validation, import whitelisting, and a 10s timeout is defense in depth. The subprocess pre-loads sympy and numpy (when available) so the agent does not waste a step importing them.
+**Why subprocess for python_executor:** `exec()` in-process is a sandbox escape waiting to happen. A subprocess with AST validation, import whitelisting, and a 30s timeout by default is defense in depth. The subprocess pre-loads sympy and numpy (when available) so the agent does not waste a step importing them.
 
 **Why FreeModelFallback:** Portfolio projects should not cost money to run. The fallback chain means if Gemini's free tier rate-limits, Groq picks up. If Groq is down, GitHub Models gets a shot. The user never sees a failed run unless every provider is genuinely unreachable.
 
