@@ -9,6 +9,7 @@ from agent.embedding import (
     EMBED_DIM,
     EMBED_MAX_RETRIES,
     embed_batch,
+    embed_query,
     embed_texts,
 )
 from agent.ingest import ingest_document, strip_invisible
@@ -100,11 +101,20 @@ class EmbedBatchTests(unittest.TestCase):
 
     def test_batches_of_100(self):
         with patch("agent.embedding.embed_batch", new_callable=AsyncMock) as batch:
-            batch.side_effect = lambda texts, key: [[0.0] * EMBED_DIM for _ in texts]
+            batch.side_effect = lambda texts, key, task_type: [[0.0] * EMBED_DIM for _ in texts]
             result = asyncio.run(embed_texts(["t"] * 150, "test-key"))
         self.assertEqual(batch.call_count, 2)
         self.assertEqual(len(result), 150)
         self.assertEqual(EMBED_BATCH_SIZE, 100)
+
+    def test_query_and_document_task_types(self):
+        ok = _mk_response(200, {"embeddings": [{"values": [0.1] * EMBED_DIM}]})
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as post:
+            post.return_value = ok
+            asyncio.run(embed_texts(["chunk"], "test-key"))
+            asyncio.run(embed_query("question", "test-key"))
+        task_types = [c.kwargs["json"]["requests"][0]["taskType"] for c in post.call_args_list]
+        self.assertEqual(task_types, ["RETRIEVAL_DOCUMENT", "RETRIEVAL_QUERY"])
 
 
 class IngestTests(unittest.TestCase):

@@ -17,8 +17,13 @@ EMBED_MAX_RETRIES = 3
 EMBED_DIM = 768  # matches document_chunks.embedding vector(768)
 
 
-async def embed_batch(texts: list[str], api_key: str) -> list[list[float]]:
+async def embed_batch(
+    texts: list[str], api_key: str, task_type: str = "RETRIEVAL_DOCUMENT"
+) -> list[list[float]]:
     """Embed up to EMBED_BATCH_SIZE texts via gemini-embedding-001.
+
+    task_type is RETRIEVAL_DOCUMENT for stored chunks and RETRIEVAL_QUERY for
+    search queries; Gemini tunes each side of the asymmetric retrieval pair.
 
     Retries with exponential backoff on HTTP 429 (rate limit). Any other HTTP
     error, or exhausting EMBED_MAX_RETRIES, raises a RuntimeError whose message
@@ -31,6 +36,7 @@ async def embed_batch(texts: list[str], api_key: str) -> list[list[float]]:
             {
                 "model": "models/gemini-embedding-001",
                 "content": {"parts": [{"text": text}]},
+                "taskType": task_type,
                 "outputDimensionality": EMBED_DIM,
             }
             for text in texts
@@ -65,15 +71,17 @@ async def embed_batch(texts: list[str], api_key: str) -> list[list[float]]:
     )
 
 
-async def embed_texts(texts: list[str], api_key: str) -> list[list[float]]:
+async def embed_texts(
+    texts: list[str], api_key: str, task_type: str = "RETRIEVAL_DOCUMENT"
+) -> list[list[float]]:
     """Embed all texts in batches of EMBED_BATCH_SIZE, preserving input order."""
     results: list[list[float]] = []
     for start in range(0, len(texts), EMBED_BATCH_SIZE):
         batch = texts[start : start + EMBED_BATCH_SIZE]
-        results.extend(await embed_batch(batch, api_key))
+        results.extend(await embed_batch(batch, api_key, task_type))
     return results
 
 
 async def embed_query(text: str, api_key: str) -> list[float]:
     """Embed a single query string (used by document_search retrieval)."""
-    return (await embed_texts([text], api_key))[0]
+    return (await embed_texts([text], api_key, "RETRIEVAL_QUERY"))[0]

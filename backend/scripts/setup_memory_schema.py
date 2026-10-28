@@ -39,6 +39,19 @@ async def main() -> int:
         print("Running AsyncPostgresStore.setup() ...")
         await store.setup()
 
+        # LangGraph creates these without RLS, which exposes them to the anon REST API.
+        # The app connects as their owner (postgres), so RLS without policies leaves it unaffected.
+        async with conn.cursor() as cur:
+            for table in (
+                "checkpoint_migrations",
+                "checkpoints",
+                "checkpoint_blobs",
+                "checkpoint_writes",
+                "store_migrations",
+                "store",
+            ):
+                await cur.execute(f"ALTER TABLE public.{table} ENABLE ROW LEVEL SECURITY")
+
         # Verify the three core tables are present.
         async with conn.cursor() as cur:
             await cur.execute(
